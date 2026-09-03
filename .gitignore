@@ -1,0 +1,6 @@
+data/
+*.exe
+*.log
+.env
+.DS_Store
+Thumbs.db

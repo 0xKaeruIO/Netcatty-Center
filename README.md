@@ -6,10 +6,10 @@
 
 ## 能做什么
 
-- 首次启动创建管理员账号
-- 管理员增删改主机（连接元数据，不含密码 / 私钥）
-- 签发、吊销客户端 API 密钥
-- `GET /api/v1/catalog` 供客户端拉取
+- 用启动参数或环境变量指定管理员账号（不写入数据库）
+- 管理员增删改主机（含登录密码、密钥、启动命令 / Expect-Send 规则，以及目录可见范围）
+- 签发、吊销、重新启用或彻底删除客户端 API 密钥
+- `GET /api/v1/catalog` 按密钥可见范围下发主机
 
 ## 启动
 
@@ -17,7 +17,7 @@
 
 ```bash
 cd D:\code\Netcatty-Center
-go run ./cmd/center
+go run ./cmd/center --admin-user admin --admin-password change-me
 ```
 
 浏览器打开 http://127.0.0.1:4780
@@ -41,6 +41,12 @@ go build -o center.exe ./cmd/center
 | `DATA_DIR` | `./data` | SQLite 目录 |
 | `NCC_PUBLIC_DIR` | `./public` | 管理后台静态文件 |
 | `NCC_COOKIE_SECURE` | 未设置 | 设为 `1` 时管理后台 cookie 带 Secure（HTTPS） |
+| `NCC_ADMIN_USER` | 未设置 | 管理员用户名（不入库；也可 `--admin-user`） |
+| `NCC_ADMIN_PASSWORD` | 未设置 | 管理员密码（不入库；也可 `--admin-password`） |
+
+修改管理员账号：改启动参数或环境变量后重启进程，不必改数据库。两个值必须一起提供。
+
+未提供启动参数时，仍可走首次初始化，把管理员写进 SQLite（兼容旧部署）。
 
 ## 客户端约定（尚未接入）
 
@@ -75,6 +81,12 @@ curl -H "Authorization: Bearer ncc_你的密钥" http://127.0.0.1:4780/api/v1/ca
       "protocol": "ssh",
       "deviceType": "general",
       "notes": "",
+      "password": "",
+      "privateKey": "",
+      "passphrase": "",
+      "startupCommand": "tmux attach || tmux",
+      "startupCommandRunMode": "paste",
+      "startupCommandRules": [],
       "updatedAt": 1710000000000
     }
   ]

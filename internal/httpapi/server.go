@@ -12,6 +12,7 @@ import (
 
 	"netcatty-center/internal/config"
 	"netcatty-center/internal/security"
+	"netcatty-center/internal/share"
 	"netcatty-center/internal/store"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,7 @@ type Server struct {
 	store  *store.Store
 	config config.Config
 	engine *gin.Engine
+	hub    *share.Hub
 }
 
 func New(st *store.Store, cfg config.Config) *Server {
@@ -29,7 +31,7 @@ func New(st *store.Store, cfg config.Config) *Server {
 	engine.Use(gin.Logger(), gin.Recovery())
 	engine.Use(cors())
 
-	srv := &Server{store: st, config: cfg, engine: engine}
+	srv := &Server{store: st, config: cfg, engine: engine, hub: share.NewHub()}
 	srv.routes()
 	return srv
 }
@@ -41,6 +43,10 @@ func (s *Server) Engine() *gin.Engine {
 func (s *Server) routes() {
 	s.engine.GET("/api/v1/health", s.health)
 	s.engine.GET("/api/v1/catalog", s.catalog)
+	s.engine.POST("/api/v1/share/rooms", s.createShareRoom)
+	s.engine.POST("/api/v1/share/join", s.joinShareRoom)
+	s.engine.DELETE("/api/v1/share/rooms/:id", s.deleteShareRoom)
+	s.engine.GET("/ws/v1/share/:id", s.shareWS)
 
 	s.engine.GET("/api/admin/setup-status", s.setupStatus)
 	s.engine.POST("/api/admin/setup", s.setup)
@@ -55,6 +61,8 @@ func (s *Server) routes() {
 
 	s.engine.GET("/api/admin/keys", s.requireAdmin, s.listKeys)
 	s.engine.POST("/api/admin/keys", s.requireAdmin, s.createKey)
+	s.engine.POST("/api/admin/keys/:id/restore", s.requireAdmin, s.restoreKey)
+	s.engine.POST("/api/admin/keys/:id/delete", s.requireAdmin, s.deleteKey)
 	s.engine.DELETE("/api/admin/keys/:id", s.requireAdmin, s.revokeKey)
 
 	s.engine.GET("/api/admin/settings", s.requireAdmin, s.getSettings)
@@ -112,6 +120,9 @@ func (s *Server) catalog(c *gin.Context) {
 	}
 	catalog := make([]store.CatalogHost, 0, len(hosts))
 	for _, host := range hosts {
+		if !host.VisibleToKey(id) {
+			continue
+		}
 		catalog = append(catalog, store.ToCatalogHost(host))
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -126,6 +137,15 @@ func (s *Server) catalog(c *gin.Context) {
 }
 
 func (s *Server) setupStatus(c *gin.Context) {
+	if s.config.HasBootstrapAdmin() {
+		settings, err := s.store.Settings()
+		if err != nil {
+			fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"needsSetup": false, "settings": settings, "bootstrapAdmin": true})
+		return
+	}
 	needs, err := s.store.NeedsSetup()
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -140,6 +160,10 @@ func (s *Server) setupStatus(c *gin.Context) {
 }
 
 func (s *Server) setup(c *gin.Context) {
+	if s.config.HasBootstrapAdmin() {
+		fail(c, http.StatusConflict, "已通过启动参数配置管理员，请直接登录")
+		return
+	}
 	needs, err := s.store.NeedsSetup()
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -185,6 +209,26 @@ func (s *Server) login(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "请求无效")
 		return
 	}
+	if s.config.HasBootstrapAdmin() {
+		if !s.config.MatchAdmin(body.Username, body.Password) {
+			fail(c, http.StatusUnauthorized, "用户名或密码错误")
+			return
+		}
+		if err := s.store.EnsureAdminAnchor(config.BootstrapAdminID); err != nil {
+			fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.issueSession(c, config.BootstrapAdminID)
+		settings, _ := s.store.Settings()
+		c.JSON(http.StatusOK, gin.H{
+			"admin": store.Admin{
+				ID:       config.BootstrapAdminID,
+				Username: strings.TrimSpace(s.config.AdminUser),
+			},
+			"settings": settings,
+		})
+		return
+	}
 	admin, err := s.store.FindAdminByUsername(body.Username)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -218,7 +262,11 @@ func (s *Server) me(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"admin": admin, "settings": settings})
+	c.JSON(http.StatusOK, gin.H{
+		"admin":          admin,
+		"settings":       settings,
+		"bootstrapAdmin": s.config.HasBootstrapAdmin(),
+	})
 }
 
 func (s *Server) listHosts(c *gin.Context) {
@@ -317,6 +365,32 @@ func (s *Server) revokeKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (s *Server) restoreKey(c *gin.Context) {
+	ok, err := s.store.RestoreAPIKey(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		fail(c, http.StatusNotFound, "密钥不存在或未吊销")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) deleteKey(c *gin.Context) {
+	ok, err := s.store.DeleteAPIKey(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		fail(c, http.StatusNotFound, "密钥不存在")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (s *Server) getSettings(c *gin.Context) {
 	settings, err := s.store.Settings()
 	if err != nil {
@@ -360,6 +434,20 @@ func (s *Server) requireAdmin(c *gin.Context) {
 		s.clearSession(c)
 		fail(c, http.StatusUnauthorized, "会话已过期，请重新登录")
 		c.Abort()
+		return
+	}
+	if session.AdminID == config.BootstrapAdminID {
+		if !s.config.HasBootstrapAdmin() {
+			s.clearSession(c)
+			fail(c, http.StatusUnauthorized, "未登录")
+			c.Abort()
+			return
+		}
+		c.Set("admin", store.Admin{
+			ID:       config.BootstrapAdminID,
+			Username: strings.TrimSpace(s.config.AdminUser),
+		})
+		c.Next()
 		return
 	}
 	admin, err := s.store.GetAdmin(session.AdminID)
@@ -439,19 +527,24 @@ func bindHostInput(c *gin.Context) (store.HostInput, error) {
 		return store.HostInput{}, errors.New("请求无效")
 	}
 	input := store.HostInput{
-		Label:      asString(raw["label"]),
-		Hostname:   asString(raw["hostname"]),
-		Port:       asInt(raw["port"], 22),
-		Username:   asString(raw["username"]),
-		Group:      asString(raw["group"]),
-		Tags:       asTags(raw["tags"]),
-		OS:         asString(raw["os"]),
-		Protocol:   asString(raw["protocol"]),
-		DeviceType: asString(raw["deviceType"]),
-		Notes:      asString(raw["notes"]),
-		Password:   asString(raw["password"]),
-		PrivateKey: asString(raw["privateKey"]),
-		Passphrase: asString(raw["passphrase"]),
+		Label:                 asString(raw["label"]),
+		Hostname:              asString(raw["hostname"]),
+		Port:                  asInt(raw["port"], 22),
+		Username:              asString(raw["username"]),
+		Group:                 asString(raw["group"]),
+		Tags:                  asTags(raw["tags"]),
+		OS:                    asString(raw["os"]),
+		Protocol:              asString(raw["protocol"]),
+		DeviceType:            asString(raw["deviceType"]),
+		Notes:                 asString(raw["notes"]),
+		Password:              asString(raw["password"]),
+		PrivateKey:            asString(raw["privateKey"]),
+		Passphrase:            asString(raw["passphrase"]),
+		StartupCommand:        asString(raw["startupCommand"]),
+		StartupCommandRunMode: asString(raw["startupCommandRunMode"]),
+		StartupCommandRules:   asStartupRules(raw["startupCommandRules"]),
+		Visibility:            asString(raw["visibility"]),
+		VisibleKeyIDs:         asIDs(raw["visibleKeyIds"]),
 	}
 	return input, nil
 }
@@ -504,6 +597,28 @@ func asTags(raw json.RawMessage) []string {
 			}
 		}
 		return out
+	}
+	return nil
+}
+
+func asIDs(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err == nil {
+		return ids
+	}
+	return asTags(raw)
+}
+
+func asStartupRules(raw json.RawMessage) []store.StartupCommandRule {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var rules []store.StartupCommandRule
+	if err := json.Unmarshal(raw, &rules); err == nil {
+		return rules
 	}
 	return nil
 }

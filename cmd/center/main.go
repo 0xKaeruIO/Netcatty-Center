@@ -12,7 +12,13 @@ import (
 )
 
 func main() {
-	cfg := config.FromEnv()
+	cfg, err := config.Load(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if cfg.HasBootstrapAdmin() {
+		log.Printf("admin login uses --admin-user / NCC_ADMIN_USER (not stored in the database)")
+	}
 	if !filepath.IsAbs(cfg.PublicDir) {
 		if wd, err := os.Getwd(); err == nil {
 			cfg.PublicDir = filepath.Join(wd, cfg.PublicDir)

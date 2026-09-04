@@ -240,6 +240,7 @@ function renderHosts() {
             h("th", {}, "用户"),
             h("th", {}, "登录"),
             h("th", {}, "分组"),
+            h("th", {}, "可见"),
             h("th", {}, "标签"),
             h("th", {}, ""),
           )),
@@ -252,9 +253,10 @@ function renderHosts() {
             h("td", { class: "mono" }, host.username || "—"),
             h("td", {}, hostAuthLabel(host)),
             h("td", {}, host.group || "—"),
+            h("td", {}, hostVisibilityLabel(host)),
             h("td", {}, (host.tags || []).map((tag) => h("span", { class: "tag" }, tag))),
             h("td", {}, h("div", { class: "row-actions" },
-              h("button", { class: "btn", onClick: () => { state.editing = { ...host }; render(); } }, "编辑"),
+              h("button", { class: "btn", onClick: () => { state.editing = cloneHostForEdit(host); render(); } }, "编辑"),
               h("button", {
                 class: "btn btn-danger",
                 onClick: async () => {
@@ -287,7 +289,34 @@ function emptyHost() {
     password: "",
     privateKey: "",
     passphrase: "",
+    startupCommand: "",
+    startupCommandRunMode: "paste",
+    startupCommandRules: [],
+    visibility: "all",
+    visibleKeyIds: [],
   };
+}
+
+function cloneHostForEdit(host) {
+  return {
+    ...emptyHost(),
+    ...host,
+    startupCommandRules: Array.isArray(host.startupCommandRules)
+      ? host.startupCommandRules.map((rule) => ({
+        expect: rule?.expect ?? "",
+        send: rule?.send ?? "",
+      }))
+      : [],
+    visibleKeyIds: Array.isArray(host.visibleKeyIds) ? [...host.visibleKeyIds] : [],
+  };
+}
+
+function hostStartupRules(host) {
+  return Array.isArray(host.startupCommandRules) ? host.startupCommandRules : [];
+}
+
+function hasUsableStartupRules(host) {
+  return hostStartupRules(host).some((rule) => String(rule?.send ?? "").length > 0);
 }
 
 function renderHostDrawer() {
@@ -300,7 +329,7 @@ function renderHostDrawer() {
     }
   } },
     h("form", {
-      class: "drawer",
+      class: host.visibility === "keys" ? "drawer drawer-wide" : "drawer",
       onSubmit: async (event) => {
         event.preventDefault();
         state.error = "";
@@ -320,6 +349,8 @@ function renderHostDrawer() {
         }
       },
     },
+      h("div", { class: host.visibility === "keys" ? "drawer-split" : "drawer-single" },
+      h("div", { class: "drawer-form" },
       h("h2", {}, isNew ? "添加主机" : "编辑主机"),
       field("显示名称", bind(host, "label", { required: true })),
       h("div", { class: "grid-2" },
@@ -351,7 +382,50 @@ function renderHostDrawer() {
         onInput: (e) => { host.privateKey = e.target.value; },
       })),
       field("私钥口令（可选）", bind(host, "passphrase", { type: "password", autocomplete: "off" })),
-      h("p", { style: "color:var(--muted);margin:0;font-size:12px" }, "密码和密钥会随目录下发给已配置的 Netcatty 客户端，便于直接连接。"),
+      field("连接后发送方式", h("select", {
+        onChange: (e) => {
+          host.startupCommandRunMode = e.target.value;
+          if (host.startupCommandRunMode === "rules" && hostStartupRules(host).length === 0) {
+            host.startupCommandRules = [{ expect: "", send: "" }];
+          }
+          render();
+        },
+      }, [
+        ["paste", "一次性发送"],
+        ["lineDelay", "逐行发送"],
+        ["rules", "规则模式（Expect / Send）"],
+      ].map(([value, label]) => h("option", {
+        value,
+        selected: (host.startupCommandRunMode || "paste") === value,
+      }, label)))),
+      host.startupCommandRunMode === "rules"
+        ? renderStartupRules(host)
+        : field("启动命令", h("textarea", {
+          class: "mono",
+          value: host.startupCommand || "",
+          placeholder: "连接后执行的命令（例如：cd /app && ls）",
+          onInput: (e) => { host.startupCommand = e.target.value; },
+        })),
+      h("p", { class: "hint" },
+        host.startupCommandRunMode === "rules"
+          ? "终端出现指定文本后发送对应命令。匹配文本留空则立即发送。可添加多条规则，按顺序跳转主机。规则会随目录下发给客户端。"
+          : "SSH 连接建立后将自动执行该命令。规则模式与启动命令互斥。密码、密钥和启动规则都会随目录下发。"),
+      field("目录可见范围", h("select", {
+        onChange: (e) => {
+          host.visibility = e.target.value;
+          render();
+        },
+      }, [
+        ["all", "全部可见"],
+        ["keys", "仅特定密钥列表可见"],
+      ].map(([value, label]) => h("option", {
+        value,
+        selected: (host.visibility || "all") === value,
+      }, label)))),
+      h("p", { class: "hint" },
+        host.visibility === "keys"
+          ? "只有勾选的客户端密钥拉取目录时能看到这台主机。未勾选任何密钥则对所有客户端隐藏。"
+          : "所有有效客户端密钥都能拉取到这台主机。"),
       h("div", { class: "toolbar", style: "margin-top:8px" },
         h("button", { class: "btn btn-primary", type: "submit" }, "保存"),
         h("button", {
@@ -359,6 +433,9 @@ function renderHostDrawer() {
           type: "button",
           onClick: () => { state.editing = null; render(); },
         }, "取消"),
+      ),
+      ),
+      host.visibility === "keys" ? renderVisibleKeyPicker(host) : null,
       ),
     ),
   );
@@ -412,14 +489,36 @@ function renderKeys() {
             h("td", {}, formatTime(key.createdAt)),
             h("td", {}, formatTime(key.lastUsedAt)),
             h("td", {}, key.revokedAt ? "已吊销" : "有效"),
-            h("td", {}, key.revokedAt ? null : h("button", {
-              class: "btn btn-danger",
-              onClick: async () => {
-                if (!confirm("吊销后，使用该密钥的客户端将无法再拉取目录。")) return;
-                await api(`/api/admin/keys/${key.id}`, { method: "DELETE" });
-                await loadWorkspace();
-              },
-            }, "吊销")),
+            h("td", {}, h("div", { class: "row-actions" },
+              key.revokedAt
+                ? [
+                  h("button", {
+                    class: "btn",
+                    onClick: async () => {
+                      await api(`/api/admin/keys/${key.id}/restore`, { method: "POST" });
+                      state.notice = "已重新启用密钥";
+                      await loadWorkspace();
+                    },
+                  }, "重新启用"),
+                  h("button", {
+                    class: "btn btn-danger",
+                    onClick: async () => {
+                      if (!confirm(`彻底删除密钥 ${key.name}？删除后无法恢复，使用该密钥的客户端将无法再拉取目录。`)) return;
+                      await api(`/api/admin/keys/${key.id}/delete`, { method: "POST" });
+                      state.notice = "已彻底删除密钥";
+                      await loadWorkspace();
+                    },
+                  }, "彻底删除"),
+                ]
+                : h("button", {
+                  class: "btn btn-danger",
+                  onClick: async () => {
+                    if (!confirm("吊销后，使用该密钥的客户端将无法再拉取目录。之后仍可重新启用或彻底删除。")) return;
+                    await api(`/api/admin/keys/${key.id}`, { method: "DELETE" });
+                    await loadWorkspace();
+                  },
+                }, "吊销"),
+            )),
           ))),
         ),
       ),
@@ -466,13 +565,163 @@ function renderSettings() {
       state.notice ? h("div", { class: "banner ok" }, state.notice) : null,
       h("button", { class: "btn btn-primary", type: "submit" }, "保存"),
     ),
+    h("div", { class: "panel", style: "max-width:560px;margin-top:16px;display:flex;flex-direction:column;gap:8px" },
+      h("h2", {}, "管理员账号"),
+      h("p", { class: "hint" },
+        "用户名和密码通过启动参数或环境变量指定，不会写入数据库。修改后重启进程即可生效。"),
+      h("p", { class: "hint" },
+        "启动参数：",
+        h("span", { class: "mono" }, "--admin-user"),
+        " / ",
+        h("span", { class: "mono" }, "--admin-password")),
+      h("p", { class: "hint" },
+        "环境变量：",
+        h("span", { class: "mono" }, "NCC_ADMIN_USER"),
+        " / ",
+        h("span", { class: "mono" }, "NCC_ADMIN_PASSWORD")),
+      h("p", { class: "hint" }, "当前登录用户：", h("span", { class: "mono" }, state.me?.username || "—")),
+    ),
   );
+}
+
+function renderStartupRules(host) {
+  const rules = hostStartupRules(host);
+  return h("div", { class: "rules" },
+    h("span", { class: "field-label" }, "Expect / Send 规则"),
+    ...rules.map((rule, index) => h("div", { class: "rule-card" },
+      h("div", { class: "rule-head" },
+        h("span", {}, `步骤 ${index + 1}`),
+        h("button", {
+          class: "btn",
+          type: "button",
+          onClick: () => {
+            host.startupCommandRules = rules.filter((_, i) => i !== index);
+            render();
+          },
+        }, "删除"),
+      ),
+      h("input", {
+        class: "mono",
+        value: rule.expect || "",
+        placeholder: "匹配文本（留空则立即发送，例如 password:）",
+        onInput: (e) => { rule.expect = e.target.value; },
+      }),
+      h("input", {
+        class: "mono",
+        value: rule.send || "",
+        placeholder: "发送内容（例如 ssh user@jump）",
+        onInput: (e) => { rule.send = e.target.value; },
+      }),
+    )),
+    h("button", {
+      class: "btn",
+      type: "button",
+      onClick: () => {
+        host.startupCommandRules = [...rules, { expect: "", send: "" }];
+        render();
+      },
+    }, "添加规则"),
+  );
+}
+
+function renderVisibleKeyPicker(host) {
+  const selected = new Set(Array.isArray(host.visibleKeyIds) ? host.visibleKeyIds : []);
+  const keys = state.keys || [];
+  const countText = () => `已选 ${(host.visibleKeyIds || []).length} / ${keys.length}`;
+  let panel;
+
+  const syncCount = () => {
+    const el = panel?.querySelector("[data-key-count]");
+    if (el) el.textContent = countText();
+  };
+
+  if (keys.length === 0) {
+    return h("aside", { class: "drawer-keys" },
+      h("h2", {}, "可见密钥"),
+      h("p", { class: "hint" }, "还没有客户端密钥。请先到「客户端密钥」签发，再勾选可见范围。"),
+    );
+  }
+
+  const applySelection = (ids) => {
+    host.visibleKeyIds = ids;
+    const set = new Set(ids);
+    panel.querySelectorAll(".key-option").forEach((el) => {
+      const box = el.querySelector("input[type=checkbox]");
+      if (box) box.checked = set.has(el.getAttribute("data-key-id"));
+    });
+    syncCount();
+  };
+
+  panel = h("aside", { class: "drawer-keys" },
+    h("div", { class: "key-list-head" },
+      h("h2", {}, "可见密钥"),
+      h("span", { class: "hint", "data-key-count": "" }, countText()),
+    ),
+    h("input", {
+      class: "key-filter",
+      placeholder: "搜索密钥名称 / 前缀",
+      onInput: (e) => {
+        const q = String(e.target.value || "").trim().toLowerCase();
+        panel.querySelectorAll(".key-option").forEach((el) => {
+          el.hidden = q !== "" && !String(el.getAttribute("data-search") || "").includes(q);
+        });
+      },
+    }),
+    h("div", { class: "toolbar" },
+      h("button", {
+        class: "btn",
+        type: "button",
+        onClick: () => applySelection(keys.filter((key) => !key.revokedAt).map((key) => key.id)),
+      }, "全选有效"),
+      h("button", {
+        class: "btn",
+        type: "button",
+        onClick: () => applySelection([]),
+      }, "清空"),
+    ),
+    h("div", { class: "key-list" },
+      ...keys.map((key) => h("label", {
+        class: "key-option",
+        "data-key-id": key.id,
+        "data-search": `${key.name} ${key.keyPrefix || ""} ${key.revokedAt ? "已吊销" : "有效"}`.toLowerCase(),
+      },
+        h("input", {
+          type: "checkbox",
+          checked: selected.has(key.id),
+          onChange: (e) => {
+            const next = new Set(host.visibleKeyIds || []);
+            if (e.target.checked) next.add(key.id);
+            else next.delete(key.id);
+            host.visibleKeyIds = [...next];
+            syncCount();
+          },
+        }),
+        h("span", { class: "key-option-text" },
+          h("strong", { class: "key-option-name" }, key.name, key.revokedAt ? "（已吊销）" : ""),
+          h("span", { class: "key-option-meta mono" }, key.keyPrefix ? `${key.keyPrefix}…` : "—", " · ", key.revokedAt ? "已吊销" : "有效"),
+        ),
+      )),
+    ),
+  );
+  return panel;
+}
+
+function hostVisibilityLabel(host) {
+  if (host.visibility === "keys") {
+    const ids = Array.isArray(host.visibleKeyIds) ? host.visibleKeyIds : [];
+    if (ids.length === 0) return "指定密钥（未选）";
+    const names = ids.map((id) => state.keys.find((key) => key.id === id)?.name || id.slice(0, 8));
+    return `指定 ${names.join("、")}`;
+  }
+  return "全部可见";
 }
 
 function hostAuthLabel(host) {
   const parts = [];
   if (host.password) parts.push("密码");
   if (host.privateKey) parts.push("密钥");
+  if (host.startupCommandRunMode === "rules" && hasUsableStartupRules(host)) parts.push("启动规则");
+  else if (host.startupCommand) parts.push("启动命令");
   return parts.join(" + ") || "未设置";
 }
 

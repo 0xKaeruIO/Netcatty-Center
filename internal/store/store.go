@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS hosts (
   password TEXT NOT NULL DEFAULT '',
   private_key TEXT NOT NULL DEFAULT '',
   passphrase TEXT NOT NULL DEFAULT '',
+  startup_command TEXT NOT NULL DEFAULT '',
+  startup_command_run_mode TEXT NOT NULL DEFAULT '',
+  startup_command_rules_json TEXT NOT NULL DEFAULT '[]',
+  visibility TEXT NOT NULL DEFAULT 'all',
+  visible_key_ids_json TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -106,62 +111,82 @@ type APIKey struct {
 	RevokedAt  *int64 `json:"revokedAt"`
 }
 
+type StartupCommandRule struct {
+	Expect string `json:"expect"`
+	Send   string `json:"send"`
+}
+
 type Host struct {
-	ID         string   `json:"id"`
-	Label      string   `json:"label"`
-	Hostname   string   `json:"hostname"`
-	Port       int      `json:"port"`
-	Username   string   `json:"username"`
-	Group      string   `json:"group"`
-	Tags       []string `json:"tags"`
-	OS         string   `json:"os"`
-	Protocol   string   `json:"protocol"`
-	DeviceType string   `json:"deviceType"`
-	Notes      string   `json:"notes"`
-	Password   string   `json:"password"`
-	PrivateKey string   `json:"privateKey"`
-	Passphrase string   `json:"passphrase"`
-	CreatedAt  int64    `json:"createdAt"`
-	UpdatedAt  int64    `json:"updatedAt"`
+	ID                    string               `json:"id"`
+	Label                 string               `json:"label"`
+	Hostname              string               `json:"hostname"`
+	Port                  int                  `json:"port"`
+	Username              string               `json:"username"`
+	Group                 string               `json:"group"`
+	Tags                  []string             `json:"tags"`
+	OS                    string               `json:"os"`
+	Protocol              string               `json:"protocol"`
+	DeviceType            string               `json:"deviceType"`
+	Notes                 string               `json:"notes"`
+	Password              string               `json:"password"`
+	PrivateKey            string               `json:"privateKey"`
+	Passphrase            string               `json:"passphrase"`
+	StartupCommand        string               `json:"startupCommand"`
+	StartupCommandRunMode string               `json:"startupCommandRunMode"`
+	StartupCommandRules   []StartupCommandRule `json:"startupCommandRules"`
+	Visibility            string               `json:"visibility"`
+	VisibleKeyIDs         []string             `json:"visibleKeyIds"`
+	CreatedAt             int64                `json:"createdAt"`
+	UpdatedAt             int64                `json:"updatedAt"`
 }
 
 type HostInput struct {
-	Label      string   `json:"label"`
-	Hostname   string   `json:"hostname"`
-	Port       int      `json:"port"`
-	Username   string   `json:"username"`
-	Group      string   `json:"group"`
-	Tags       []string `json:"tags"`
-	OS         string   `json:"os"`
-	Protocol   string   `json:"protocol"`
-	DeviceType string   `json:"deviceType"`
-	Notes      string   `json:"notes"`
-	Password   string   `json:"password"`
-	PrivateKey string   `json:"privateKey"`
-	Passphrase string   `json:"passphrase"`
+	Label                 string               `json:"label"`
+	Hostname              string               `json:"hostname"`
+	Port                  int                  `json:"port"`
+	Username              string               `json:"username"`
+	Group                 string               `json:"group"`
+	Tags                  []string             `json:"tags"`
+	OS                    string               `json:"os"`
+	Protocol              string               `json:"protocol"`
+	DeviceType            string               `json:"deviceType"`
+	Notes                 string               `json:"notes"`
+	Password              string               `json:"password"`
+	PrivateKey            string               `json:"privateKey"`
+	Passphrase            string               `json:"passphrase"`
+	StartupCommand        string               `json:"startupCommand"`
+	StartupCommandRunMode string               `json:"startupCommandRunMode"`
+	StartupCommandRules   []StartupCommandRule `json:"startupCommandRules"`
+	Visibility            string               `json:"visibility"`
+	VisibleKeyIDs         []string             `json:"visibleKeyIds"`
 }
 
 type CatalogHost struct {
-	ID         string   `json:"id"`
-	Label      string   `json:"label"`
-	Hostname   string   `json:"hostname"`
-	Port       int      `json:"port"`
-	Username   string   `json:"username"`
-	Group      string   `json:"group"`
-	Tags       []string `json:"tags"`
-	OS         string   `json:"os"`
-	Protocol   string   `json:"protocol"`
-	DeviceType string   `json:"deviceType"`
-	Notes      string   `json:"notes"`
-	Password   string   `json:"password"`
-	PrivateKey string   `json:"privateKey"`
-	Passphrase string   `json:"passphrase"`
-	UpdatedAt  int64    `json:"updatedAt"`
+	ID                    string               `json:"id"`
+	Label                 string               `json:"label"`
+	Hostname              string               `json:"hostname"`
+	Port                  int                  `json:"port"`
+	Username              string               `json:"username"`
+	Group                 string               `json:"group"`
+	Tags                  []string             `json:"tags"`
+	OS                    string               `json:"os"`
+	Protocol              string               `json:"protocol"`
+	DeviceType            string               `json:"deviceType"`
+	Notes                 string               `json:"notes"`
+	Password              string               `json:"password"`
+	PrivateKey            string               `json:"privateKey"`
+	Passphrase            string               `json:"passphrase"`
+	StartupCommand        string               `json:"startupCommand"`
+	StartupCommandRunMode string               `json:"startupCommandRunMode"`
+	StartupCommandRules   []StartupCommandRule `json:"startupCommandRules"`
+	UpdatedAt             int64                `json:"updatedAt"`
 }
 
 const hostSelectColumns = `
   id, label, hostname, port, username, group_path, tags_json,
   os, protocol, device_type, notes, password, private_key, passphrase,
+  startup_command, startup_command_run_mode, startup_command_rules_json,
+  visibility, visible_key_ids_json,
   created_at, updated_at`
 
 type Store struct {
@@ -268,6 +293,18 @@ func (s *Store) FindAdminByUsername(username string) (*AdminRow, error) {
 	return &admin, nil
 }
 
+func (s *Store) EnsureAdminAnchor(id string) error {
+	existing, err := s.GetAdmin(id)
+	if err != nil || existing != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		"INSERT INTO admins (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+		id, "ncc-bootstrap-anchor", "!", time.Now().UnixMilli(),
+	)
+	return err
+}
+
 func (s *Store) GetAdmin(id string) (*Admin, error) {
 	row := s.db.QueryRow("SELECT id, username, created_at FROM admins WHERE id = ?", id)
 	var admin Admin
@@ -347,11 +384,16 @@ func (s *Store) CreateHost(input HostInput) (Host, error) {
 	_, err = s.db.Exec(`
       INSERT INTO hosts (
         id, label, hostname, port, username, group_path, tags_json,
-        os, protocol, device_type, notes, password, private_key, passphrase, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        os, protocol, device_type, notes, password, private_key, passphrase,
+        startup_command, startup_command_run_mode, startup_command_rules_json,
+        visibility, visible_key_ids_json,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		host.ID, host.Label, host.Hostname, host.Port, host.Username, host.Group,
 		mustJSON(host.Tags), host.OS, host.Protocol, host.DeviceType, host.Notes,
 		host.Password, host.PrivateKey, host.Passphrase,
+		host.StartupCommand, host.StartupCommandRunMode, mustJSON(host.StartupCommandRules),
+		host.Visibility, mustJSON(host.VisibleKeyIDs),
 		host.CreatedAt, host.UpdatedAt,
 	)
 	return host, err
@@ -370,11 +412,16 @@ func (s *Store) UpdateHost(id string, input HostInput) (*Host, error) {
       UPDATE hosts SET
         label = ?, hostname = ?, port = ?, username = ?, group_path = ?,
         tags_json = ?, os = ?, protocol = ?, device_type = ?, notes = ?,
-        password = ?, private_key = ?, passphrase = ?, updated_at = ?
+        password = ?, private_key = ?, passphrase = ?,
+        startup_command = ?, startup_command_run_mode = ?, startup_command_rules_json = ?,
+        visibility = ?, visible_key_ids_json = ?,
+        updated_at = ?
       WHERE id = ?`,
 		host.Label, host.Hostname, host.Port, host.Username, host.Group,
 		mustJSON(host.Tags), host.OS, host.Protocol, host.DeviceType, host.Notes,
 		host.Password, host.PrivateKey, host.Passphrase,
+		host.StartupCommand, host.StartupCommandRunMode, mustJSON(host.StartupCommandRules),
+		host.Visibility, mustJSON(host.VisibleKeyIDs),
 		host.UpdatedAt, id,
 	)
 	if err != nil {
@@ -464,6 +511,58 @@ func (s *Store) RevokeAPIKey(id string) (bool, error) {
 	return n > 0, nil
 }
 
+func (s *Store) RestoreAPIKey(id string) (bool, error) {
+	result, err := s.db.Exec(
+		"UPDATE api_keys SET revoked_at = NULL WHERE id = ? AND revoked_at IS NOT NULL",
+		id,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n > 0, nil
+}
+
+func (s *Store) DeleteAPIKey(id string) (bool, error) {
+	result, err := s.db.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return false, nil
+	}
+	return true, s.removeAPIKeyFromHostVisibility(id)
+}
+
+func (s *Store) removeAPIKeyFromHostVisibility(keyID string) error {
+	hosts, err := s.ListHosts()
+	if err != nil {
+		return err
+	}
+	for _, host := range hosts {
+		next := make([]string, 0, len(host.VisibleKeyIDs))
+		changed := false
+		for _, id := range host.VisibleKeyIDs {
+			if id == keyID {
+				changed = true
+				continue
+			}
+			next = append(next, id)
+		}
+		if !changed {
+			continue
+		}
+		if _, err := s.db.Exec(
+			"UPDATE hosts SET visible_key_ids_json = ? WHERE id = ?",
+			mustJSON(next), host.ID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) createAdmin(username, password string) (Admin, error) {
 	hash, err := security.HashPassword(password)
 	if err != nil {
@@ -491,7 +590,22 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("hosts", "private_key", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
-	return s.ensureColumn("hosts", "passphrase", `TEXT NOT NULL DEFAULT ''`)
+	if err := s.ensureColumn("hosts", "passphrase", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("hosts", "startup_command", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("hosts", "startup_command_run_mode", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("hosts", "startup_command_rules_json", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("hosts", "visibility", `TEXT NOT NULL DEFAULT 'all'`); err != nil {
+		return err
+	}
+	return s.ensureColumn("hosts", "visible_key_ids_json", `TEXT NOT NULL DEFAULT '[]'`)
 }
 
 func (s *Store) ensureColumn(table, name, ddl string) error {
@@ -541,22 +655,33 @@ func (s *Store) setSetting(key, value string) error {
 }
 
 func ToCatalogHost(host Host) CatalogHost {
+	command := host.StartupCommand
+	if host.StartupCommandRunMode == "rules" {
+		command = ""
+	}
+	rules := host.StartupCommandRules
+	if rules == nil {
+		rules = []StartupCommandRule{}
+	}
 	return CatalogHost{
-		ID:         host.ID,
-		Label:      host.Label,
-		Hostname:   host.Hostname,
-		Port:       host.Port,
-		Username:   host.Username,
-		Group:      host.Group,
-		Tags:       host.Tags,
-		OS:         host.OS,
-		Protocol:   host.Protocol,
-		DeviceType: host.DeviceType,
-		Notes:      host.Notes,
-		Password:   host.Password,
-		PrivateKey: host.PrivateKey,
-		Passphrase: host.Passphrase,
-		UpdatedAt:  host.UpdatedAt,
+		ID:                    host.ID,
+		Label:                 host.Label,
+		Hostname:              host.Hostname,
+		Port:                  host.Port,
+		Username:              host.Username,
+		Group:                 host.Group,
+		Tags:                  host.Tags,
+		OS:                    host.OS,
+		Protocol:              host.Protocol,
+		DeviceType:            host.DeviceType,
+		Notes:                 host.Notes,
+		Password:              host.Password,
+		PrivateKey:            host.PrivateKey,
+		Passphrase:            host.Passphrase,
+		StartupCommand:        command,
+		StartupCommandRunMode: host.StartupCommandRunMode,
+		StartupCommandRules:   rules,
+		UpdatedAt:             host.UpdatedAt,
 	}
 }
 
@@ -567,10 +692,14 @@ type rowScanner interface {
 func scanHost(row rowScanner) (Host, error) {
 	var host Host
 	var tagsJSON string
+	var rulesJSON string
+	var visibleKeysJSON string
 	err := row.Scan(
 		&host.ID, &host.Label, &host.Hostname, &host.Port, &host.Username, &host.Group,
 		&tagsJSON, &host.OS, &host.Protocol, &host.DeviceType, &host.Notes,
 		&host.Password, &host.PrivateKey, &host.Passphrase,
+		&host.StartupCommand, &host.StartupCommandRunMode, &rulesJSON,
+		&host.Visibility, &visibleKeysJSON,
 		&host.CreatedAt, &host.UpdatedAt,
 	)
 	if err != nil {
@@ -580,6 +709,9 @@ func scanHost(row rowScanner) (Host, error) {
 	if host.Tags == nil {
 		host.Tags = []string{}
 	}
+	host.StartupCommandRules = parseStoredStartupRules(rulesJSON)
+	host.Visibility = asVisibility(host.Visibility)
+	host.VisibleKeyIDs = parseStoredIDs(visibleKeysJSON)
 	return host, nil
 }
 
@@ -599,24 +731,46 @@ func hostFromInput(id string, input HostInput, createdAt, updatedAt int64) (Host
 	if port < 1 || port > 65535 {
 		return Host{}, ErrBadPort
 	}
+	runMode := asStartupRunMode(input.StartupCommandRunMode)
+	command := input.StartupCommand
+	if runMode == "rules" {
+		command = ""
+	}
 	return Host{
-		ID:         id,
-		Label:      label,
-		Hostname:   hostname,
-		Port:       port,
-		Username:   strings.TrimSpace(input.Username),
-		Group:      strings.TrimSpace(input.Group),
-		Tags:       normalizeTags(input.Tags),
-		OS:         asOS(input.OS),
-		Protocol:   asProtocol(input.Protocol),
-		DeviceType: asDeviceType(input.DeviceType),
-		Notes:      strings.TrimSpace(input.Notes),
-		Password:   input.Password,
-		PrivateKey: strings.TrimSpace(input.PrivateKey),
-		Passphrase: input.Passphrase,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
+		ID:                    id,
+		Label:                 label,
+		Hostname:              hostname,
+		Port:                  port,
+		Username:              strings.TrimSpace(input.Username),
+		Group:                 strings.TrimSpace(input.Group),
+		Tags:                  normalizeTags(input.Tags),
+		OS:                    asOS(input.OS),
+		Protocol:              asProtocol(input.Protocol),
+		DeviceType:            asDeviceType(input.DeviceType),
+		Notes:                 strings.TrimSpace(input.Notes),
+		Password:              input.Password,
+		PrivateKey:            strings.TrimSpace(input.PrivateKey),
+		Passphrase:            input.Passphrase,
+		StartupCommand:        command,
+		StartupCommandRunMode: runMode,
+		StartupCommandRules:   normalizeStartupRules(input.StartupCommandRules),
+		Visibility:            asVisibility(input.Visibility),
+		VisibleKeyIDs:         normalizeIDs(input.VisibleKeyIDs),
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
 	}, nil
+}
+
+func (h Host) VisibleToKey(keyID string) bool {
+	if asVisibility(h.Visibility) != "keys" {
+		return true
+	}
+	for _, id := range h.VisibleKeyIDs {
+		if id == keyID {
+			return true
+		}
+	}
+	return false
 }
 
 func parseStoredTags(raw string) []string {
@@ -666,6 +820,72 @@ func asDeviceType(value string) string {
 		return "network"
 	}
 	return "general"
+}
+
+func asVisibility(value string) string {
+	if strings.TrimSpace(value) == "keys" {
+		return "keys"
+	}
+	return "all"
+}
+
+func parseStoredIDs(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return []string{}
+	}
+	return normalizeIDs(ids)
+}
+
+func normalizeIDs(ids []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func asStartupRunMode(value string) string {
+	switch strings.TrimSpace(value) {
+	case "paste", "lineDelay", "rules":
+		return strings.TrimSpace(value)
+	default:
+		return ""
+	}
+}
+
+func parseStoredStartupRules(raw string) []StartupCommandRule {
+	if strings.TrimSpace(raw) == "" {
+		return []StartupCommandRule{}
+	}
+	var rules []StartupCommandRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return []StartupCommandRule{}
+	}
+	return normalizeStartupRules(rules)
+}
+
+func normalizeStartupRules(rules []StartupCommandRule) []StartupCommandRule {
+	out := make([]StartupCommandRule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, StartupCommandRule{
+			Expect: rule.Expect,
+			Send:   rule.Send,
+		})
+	}
+	return out
 }
 
 func mustJSON(v any) string {

@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/gin-gonic/gin v1.10.1
+	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.41.0
 	modernc.org/sqlite v1.38.2
 )

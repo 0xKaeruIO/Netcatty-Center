@@ -23,9 +23,9 @@ cd D:\code\Netcatty-Center
 go run ./cmd/center --admin-user admin --admin-password change-me
 ```
 
-浏览器打开 http://127.0.0.1:4780
+浏览器打开 https://127.0.0.1:4780 （默认内存自签名证书，不落盘；浏览器会提示不安全，选继续即可）。若要明文 HTTP：`--plain-http` 或 `NCC_HTTPS=0`。
 
-数据文件默认写在 `data/center.sqlite`。
+数据文件默认写在 `data/center.sqlite`。Linux 用 systemd 部署可见 `examples/netcatty-center.service`。
 
 编译后管理后台页面会打进二进制，不必再带 `public` 目录。改 `public/` 后需要重新 `go run` / `go build`。
 
@@ -42,7 +42,8 @@ go build -o center.exe ./cmd/center
 | `PORT` | `4780` | 监听端口 |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `DATA_DIR` | `./data` | SQLite 目录 |
-| `NCC_COOKIE_SECURE` | 未设置 | 设为 `1` 时管理后台 cookie 带 Secure（HTTPS） |
+| `NCC_HTTPS` | `1` | 默认启用内存自签名 HTTPS（不写磁盘）；设为 `0` 则明文 HTTP（也可 `--plain-http` / `--https=false`） |
+| `NCC_COOKIE_SECURE` | 跟随 HTTPS | 管理后台 cookie 是否带 Secure；未设置时与 HTTPS 一致 |
 | `NCC_ADMIN_USER` | 未设置 | 管理员用户名（不入库；也可 `--admin-user`） |
 | `NCC_ADMIN_PASSWORD` | 未设置 | 管理员密码（不入库；也可 `--admin-password`） |
 
@@ -60,7 +61,7 @@ go build -o center.exe ./cmd/center
 拉取目录：
 
 ```bash
-curl -H "Authorization: Bearer ncc_你的密钥" http://127.0.0.1:4780/api/v1/catalog
+curl -k -H "Authorization: Bearer ncc_你的密钥" https://127.0.0.1:4780/api/v1/catalog
 ```
 
 返回示例：
@@ -107,6 +108,6 @@ internal/store/    SQLite
 internal/security/ 密码与 API 密钥
 internal/httpapi/  Gin 路由（管理员会话 + catalog）
 public/            管理后台页面（构建时 embed 进二进制）
-examples/          主机 JSON 导入示例
+examples/          主机 JSON 导入示例、systemd 单元
 data/              运行时数据库（不入库）
 ```

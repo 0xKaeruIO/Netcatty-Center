@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"netcatty-center/internal/config"
 	"netcatty-center/internal/httpapi"
 	"netcatty-center/internal/store"
+	"netcatty-center/internal/tlscert"
 )
 
 func main() {
@@ -25,9 +27,25 @@ func main() {
 	}
 	defer st.Close()
 
-	srv := httpapi.New(st, cfg)
-	log.Printf("Netcatty Center listening on http://%s", cfg.Addr())
-	if err := http.ListenAndServe(cfg.Addr(), srv.Engine()); err != nil {
+	handler := httpapi.New(st, cfg).Engine()
+	server := &http.Server{
+		Addr:    cfg.Addr(),
+		Handler: handler,
+	}
+	if cfg.HTTPS {
+		cert, err := tlscert.Generate(cfg.Host)
+		if err != nil {
+			log.Fatalf("generate self-signed certificate: %v", err)
+		}
+		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		log.Printf("Netcatty Center listening on %s (in-memory self-signed TLS)", cfg.PublicURL())
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	log.Printf("Netcatty Center listening on %s", cfg.PublicURL())
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

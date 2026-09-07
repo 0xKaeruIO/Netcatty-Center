@@ -1,0 +1,40 @@
+[Unit]
+Description=Netcatty Center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netcatty
+Group=netcatty
+WorkingDirectory=/var/lib/netcatty-center
+Environment=HOST=0.0.0.0
+Environment=PORT=4780
+Environment=DATA_DIR=/var/lib/netcatty-center
+Environment=NCC_ADMIN_USER=admin
+Environment=NCC_ADMIN_PASSWORD=change-me
+# 默认自签名 HTTPS。若前面有反向代理终结 TLS，改为明文：
+# Environment=NCC_HTTPS=0
+ExecStart=/usr/local/bin/netcatty-center --data-dir /var/lib/netcatty-center
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+# 日志走 journald：journalctl -u netcatty-center -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netcatty-center
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/netcatty-center
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -11,6 +11,7 @@ const state = {
   query: "",
   expandedPaths: null,
   editing: null,
+  issuing: null,
 };
 
 const app = document.getElementById("app");
@@ -192,25 +193,13 @@ function navBtn(id, label) {
       state.view = id;
       state.error = "";
       state.notice = "";
+      state.issuing = null;
       render();
     },
   }, label);
 }
 
 function renderHosts() {
-  const q = state.query.trim().toLowerCase();
-  const filtered = state.hosts.filter((host) => {
-    if (!q) return true;
-    return [host.label, host.hostname, host.username, host.group, ...(host.tags || [])]
-      .join(" ")
-      .toLowerCase()
-      .includes(q);
-  });
-  const { tree, ungrouped } = buildGroupTree(filtered, q ? [] : state.groups);
-  const allPaths = collectGroupPaths(tree);
-  const searching = q !== "";
-  const hasTree = tree.length > 0 || ungrouped.length > 0;
-
   return h("section", {},
     h("div", { class: "page-head" },
       h("div", {},
@@ -224,9 +213,17 @@ function renderHosts() {
           value: state.query,
           onInput: (e) => {
             state.query = e.target.value;
-            render();
+            refreshHostList();
           },
         }),
+        h("button", {
+          class: "btn",
+          onClick: () => importHostsFromJSON(),
+        }, "从 JSON 导入"),
+        h("button", {
+          class: "btn",
+          onClick: () => exportHostsToJSON(),
+        }, "导出为 JSON"),
         h("button", {
           class: "btn",
           onClick: () => createGroup(""),
@@ -241,34 +238,67 @@ function renderHosts() {
       ),
     ),
     state.error ? h("div", { class: "banner error" }, state.error) : null,
-    !hasTree
-      ? h("div", { class: "empty" }, q ? "没有匹配的主机。" : "还没有主机或分组。添加第一台后，客户端即可按密钥拉取。")
-      : h("div", { class: "tree-wrap" },
-        tree.length > 0
-          ? h("div", { class: "tree-toolbar" },
-            h("button", {
-              class: "btn",
-              disabled: searching,
-              onClick: () => {
-                state.expandedPaths = new Set(allPaths);
-                render();
-              },
-            }, "展开全部"),
-            h("button", {
-              class: "btn",
-              disabled: searching,
-              onClick: () => {
-                state.expandedPaths = new Set();
-                render();
-              },
-            }, "折叠全部"),
-          )
-          : null,
-        ...ungrouped.map((host) => renderHostRow(host, 0)),
-        ...tree.flatMap((node) => renderGroupNode(node, 0, searching)),
-      ),
+    state.notice ? h("div", { class: "banner ok" }, state.notice) : null,
+    renderHostList(),
     state.editing ? renderHostDrawer() : null,
   );
+}
+
+function hostListMatches(host, q) {
+  if (!q) return true;
+  return [host.label, host.hostname, host.username, host.group, ...(host.tags || [])]
+    .join(" ")
+    .toLowerCase()
+    .includes(q);
+}
+
+function renderHostList() {
+  const q = state.query.trim().toLowerCase();
+  const filtered = state.hosts.filter((host) => hostListMatches(host, q));
+  const { tree, ungrouped } = buildGroupTree(filtered, q ? [] : state.groups);
+  const allPaths = collectGroupPaths(tree);
+  const searching = q !== "";
+  const hasTree = tree.length > 0 || ungrouped.length > 0;
+
+  if (!hasTree) {
+    return h("div", { id: "host-list", class: "empty" },
+      q ? "没有匹配的主机。" : "还没有主机或分组。添加第一台后，客户端即可按密钥拉取。",
+    );
+  }
+
+  return h("div", { id: "host-list", class: "tree-wrap" },
+    tree.length > 0
+      ? h("div", { class: "tree-toolbar" },
+        h("button", {
+          class: "btn",
+          disabled: searching,
+          onClick: () => {
+            state.expandedPaths = new Set(allPaths);
+            refreshHostList();
+          },
+        }, "展开全部"),
+        h("button", {
+          class: "btn",
+          disabled: searching,
+          onClick: () => {
+            state.expandedPaths = new Set();
+            refreshHostList();
+          },
+        }, "折叠全部"),
+      )
+      : null,
+    ...ungrouped.map((host) => renderHostRow(host, 0)),
+    ...tree.flatMap((node) => renderGroupNode(node, 0, searching)),
+  );
+}
+
+function refreshHostList() {
+  const current = document.getElementById("host-list");
+  if (!current) {
+    render();
+    return;
+  }
+  current.replaceWith(renderHostList());
 }
 
 function isExpanded(path, searching) {
@@ -322,6 +352,20 @@ function renderGroupNode(node, depth, searching) {
             render();
           },
         }, "删除"),
+        h("button", {
+          class: "btn btn-danger",
+          onClick: async () => {
+            const count = node.totalHostCount || 0;
+            if (!confirm(`删除分组 ${node.path} 及其下 ${count} 台主机？此操作无法撤销。`)) return;
+            const result = await api("/api/admin/groups/delete", {
+              method: "POST",
+              body: { path: node.path, deleteHosts: true },
+            });
+            state.groups = result.groups || [];
+            state.hosts = result.hosts || state.hosts;
+            render();
+          },
+        }, "删除组及主机"),
       ),
     ),
   ];
@@ -410,6 +454,70 @@ function collectGroupPaths(nodes) {
   };
   for (const node of nodes) walk(node);
   return paths;
+}
+
+async function exportHostsToJSON() {
+  state.error = "";
+  state.notice = "";
+  try {
+    const response = await fetch("/api/admin/hosts/export", { credentials: "same-origin" });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `请求失败 (${response.status})`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "hosts-export.json";
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    const hostCount = state.hosts.length;
+    const groupCount = state.groups.length;
+    state.notice = hostCount
+      ? `已导出 ${hostCount} 台主机` + (groupCount ? `，分组 ${groupCount} 个` : "")
+      : groupCount
+        ? `已导出分组 ${groupCount} 个`
+        : "已导出空目录";
+    render();
+  } catch (err) {
+    state.error = err.message;
+    render();
+  }
+}
+
+async function importHostsFromJSON() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,application/json";
+  input.addEventListener("change", async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    state.error = "";
+    state.notice = "";
+    try {
+      const text = await file.text();
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        throw new Error("JSON 文件无效");
+      }
+      const result = await api("/api/admin/hosts/import", { method: "POST", body: payload });
+      const imported = result.imported ?? (result.hosts || []).length;
+      const groupCount = (result.groups || []).length;
+      state.notice = imported
+        ? `已从 ${file.name} 导入 ${imported} 台主机` + (groupCount ? `，分组 ${groupCount} 个` : "")
+        : `已导入分组，当前共 ${groupCount} 个`;
+      await loadWorkspace();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  });
+  input.click();
 }
 
 async function createGroup(parentPath) {
@@ -606,30 +714,35 @@ function renderHostDrawer() {
   );
 }
 
+function keyPermissionLabel(permission) {
+  return permission === "readwrite" ? "可读可写" : "只读";
+}
+
 function renderKeys() {
   return h("section", {},
     h("div", { class: "page-head" },
       h("div", {},
         h("h1", {}, "客户端密钥"),
-        h("p", {}, "客户端配置「组织中心地址 + 密钥」。签发后可随时在此查看和复制。"),
+        h("p", {}, "只读密钥可拉取机器列表并使用分享；可读可写密钥还能改机器列表。新密钥默认只读。"),
       ),
       h("button", {
         class: "btn btn-primary",
-        onClick: async () => {
-          const name = prompt("密钥名称", "Netcatty 客户端") || "Netcatty 客户端";
-          await api("/api/admin/keys", { method: "POST", body: { name } });
-          state.notice = "已签发新密钥";
-          await loadWorkspace();
+        onClick: () => {
+          state.issuing = { name: "Netcatty 客户端", permission: "read" };
+          state.error = "";
+          render();
         },
       }, "签发密钥"),
     ),
     state.notice ? h("div", { class: "banner ok" }, state.notice) : null,
+    state.error ? h("div", { class: "banner error" }, state.error) : null,
     state.keys.length === 0
-      ? h("div", { class: "empty" }, "还没有客户端密钥。签发后即可用 curl 或未来的 Netcatty 客户端拉取目录。")
+      ? h("div", { class: "empty" }, "还没有客户端密钥。签发后即可用 curl 或 Netcatty 客户端拉取目录。")
       : h("div", { class: "table-wrap" },
         h("table", {},
           h("thead", {}, h("tr", {},
             h("th", {}, "名称"),
+            h("th", {}, "权限"),
             h("th", {}, "密钥"),
             h("th", {}, "创建"),
             h("th", {}, "最近使用"),
@@ -638,6 +751,9 @@ function renderKeys() {
           )),
           h("tbody", {}, state.keys.map((key) => h("tr", {},
             h("td", {}, key.name),
+            h("td", {},
+              h("span", { class: "tag" }, keyPermissionLabel(key.permission)),
+            ),
             h("td", {}, key.plaintext
               ? h("div", { class: "row-actions" },
                 h("code", { class: "mono secret-box", style: "padding:6px 8px;display:inline-block;max-width:420px" }, key.plaintext),
@@ -675,18 +791,86 @@ function renderKeys() {
                     },
                   }, "彻底删除"),
                 ]
-                : h("button", {
-                  class: "btn btn-danger",
-                  onClick: async () => {
-                    if (!confirm("吊销后，使用该密钥的客户端将无法再拉取目录。之后仍可重新启用或彻底删除。")) return;
-                    await api(`/api/admin/keys/${key.id}`, { method: "DELETE" });
-                    await loadWorkspace();
-                  },
-                }, "吊销"),
+                : [
+                  h("button", {
+                    class: "btn",
+                    onClick: async () => {
+                      const next = key.permission === "readwrite" ? "read" : "readwrite";
+                      await api(`/api/admin/keys/${key.id}`, { method: "PUT", body: { permission: next } });
+                      state.notice = `已改为${keyPermissionLabel(next)}`;
+                      await loadWorkspace();
+                    },
+                  }, key.permission === "readwrite" ? "改为只读" : "改为可读可写"),
+                  h("button", {
+                    class: "btn btn-danger",
+                    onClick: async () => {
+                      if (!confirm("吊销后，使用该密钥的客户端将无法再拉取目录。之后仍可重新启用或彻底删除。")) return;
+                      await api(`/api/admin/keys/${key.id}`, { method: "DELETE" });
+                      await loadWorkspace();
+                    },
+                  }, "吊销"),
+                ],
             )),
           ))),
         ),
       ),
+    state.issuing ? renderIssueKeyDrawer() : null,
+  );
+}
+
+function renderIssueKeyDrawer() {
+  const draft = state.issuing;
+  return h("div", { class: "overlay", onClick: (e) => {
+    if (e.target.classList.contains("overlay")) {
+      state.issuing = null;
+      render();
+    }
+  } },
+    h("form", {
+      class: "drawer",
+      onSubmit: async (event) => {
+        event.preventDefault();
+        state.error = "";
+        try {
+          await api("/api/admin/keys", {
+            method: "POST",
+            body: {
+              name: draft.name,
+              permission: draft.permission || "read",
+            },
+          });
+          state.issuing = null;
+          state.notice = `已签发${keyPermissionLabel(draft.permission || "read")}密钥`;
+          await loadWorkspace();
+        } catch (err) {
+          state.error = err.message;
+          render();
+        }
+      },
+    },
+      h("div", { class: "drawer-form" },
+        h("h2", {}, "签发客户端密钥"),
+        field("名称", bind(draft, "name", { required: true })),
+        field("权限", h("select", {
+          onChange: (e) => { draft.permission = e.target.value; },
+        }, [
+          ["read", "只读（默认）：可拉取机器列表，可开启/加入/关闭分享"],
+          ["readwrite", "可读可写：还可新增、修改、删除机器列表"],
+        ].map(([value, label]) => h("option", {
+          value,
+          selected: (draft.permission || "read") === value,
+        }, label)))),
+        h("p", { class: "hint" }, "只读不会阻止分享。分享的开启、加入和关闭对两种密钥都可用。"),
+        h("div", { class: "toolbar", style: "margin-top:8px" },
+          h("button", { class: "btn btn-primary", type: "submit" }, "签发"),
+          h("button", {
+            class: "btn",
+            type: "button",
+            onClick: () => { state.issuing = null; render(); },
+          }, "取消"),
+        ),
+      ),
+    ),
   );
 }
 
@@ -848,7 +1032,7 @@ function renderVisibleKeyPicker(host) {
       ...keys.map((key) => h("label", {
         class: "key-option",
         "data-key-id": key.id,
-        "data-search": `${key.name} ${key.keyPrefix || ""} ${key.revokedAt ? "已吊销" : "有效"}`.toLowerCase(),
+        "data-search": `${key.name} ${key.keyPrefix || ""} ${keyPermissionLabel(key.permission)} ${key.revokedAt ? "已吊销" : "有效"}`.toLowerCase(),
       },
         h("input", {
           type: "checkbox",
@@ -863,7 +1047,7 @@ function renderVisibleKeyPicker(host) {
         }),
         h("span", { class: "key-option-text" },
           h("strong", { class: "key-option-name" }, key.name, key.revokedAt ? "（已吊销）" : ""),
-          h("span", { class: "key-option-meta mono" }, key.keyPrefix ? `${key.keyPrefix}…` : "—", " · ", key.revokedAt ? "已吊销" : "有效"),
+          h("span", { class: "key-option-meta mono" }, key.keyPrefix ? `${key.keyPrefix}…` : "—", " · ", keyPermissionLabel(key.permission), " · ", key.revokedAt ? "已吊销" : "有效"),
         ),
       )),
     ),

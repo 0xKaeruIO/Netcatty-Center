@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key_hash TEXT NOT NULL UNIQUE,
   key_prefix TEXT NOT NULL,
   plaintext TEXT NOT NULL DEFAULT '',
+  permission TEXT NOT NULL DEFAULT 'read',
   created_at INTEGER NOT NULL,
   last_used_at INTEGER,
   revoked_at INTEGER
@@ -106,6 +108,7 @@ type APIKey struct {
 	Name       string `json:"name"`
 	KeyPrefix  string `json:"keyPrefix"`
 	Plaintext  string `json:"plaintext"`
+	Permission string `json:"permission"`
 	CreatedAt  int64  `json:"createdAt"`
 	LastUsedAt *int64 `json:"lastUsedAt"`
 	RevokedAt  *int64 `json:"revokedAt"`
@@ -384,7 +387,57 @@ func (s *Store) CreateHost(input HostInput) (Host, error) {
 	if err := s.EnsureGroupPaths(host.Group); err != nil {
 		return Host{}, err
 	}
-	_, err = s.db.Exec(`
+	if err := s.insertHost(host); err != nil {
+		return Host{}, err
+	}
+	return host, nil
+}
+
+func (s *Store) ImportHosts(inputs []HostInput, extraGroups []string) ([]Host, error) {
+	prepared := make([]Host, 0, len(inputs))
+	now := time.Now().UnixMilli()
+	for i, input := range inputs {
+		host, err := hostFromInput(security.RandomID(), input, now, now)
+		if err != nil {
+			return nil, importHostError(i, err)
+		}
+		prepared = append(prepared, host)
+	}
+	paths := append([]string{}, extraGroups...)
+	for _, host := range prepared {
+		if host.Group != "" {
+			paths = append(paths, host.Group)
+		}
+	}
+	if len(prepared) == 0 && len(normalizeGroupPaths(paths)) == 0 {
+		return nil, errors.New("没有可导入的主机或分组")
+	}
+	if err := s.EnsureGroupPaths(paths...); err != nil {
+		return nil, err
+	}
+	for _, host := range prepared {
+		if err := s.insertHost(host); err != nil {
+			return nil, err
+		}
+	}
+	return prepared, nil
+}
+
+func importHostError(index int, err error) error {
+	switch {
+	case errors.Is(err, ErrLabelRequired):
+		return fmt.Errorf("第 %d 台主机缺少显示名称", index+1)
+	case errors.Is(err, ErrHostRequired):
+		return fmt.Errorf("第 %d 台主机缺少主机名 / IP", index+1)
+	case errors.Is(err, ErrBadPort):
+		return fmt.Errorf("第 %d 台主机端口无效", index+1)
+	default:
+		return fmt.Errorf("第 %d 台主机无效: %w", index+1, err)
+	}
+}
+
+func (s *Store) insertHost(host Host) error {
+	_, err := s.db.Exec(`
       INSERT INTO hosts (
         id, label, hostname, port, username, group_path, tags_json,
         os, protocol, device_type, notes, password, private_key, passphrase,
@@ -399,7 +452,7 @@ func (s *Store) CreateHost(input HostInput) (Host, error) {
 		host.Visibility, mustJSON(host.VisibleKeyIDs),
 		host.CreatedAt, host.UpdatedAt,
 	)
-	return host, err
+	return err
 }
 
 func (s *Store) UpdateHost(id string, input HostInput) (*Host, error) {
@@ -445,30 +498,35 @@ func (s *Store) DeleteHost(id string) (bool, error) {
 	return n > 0, nil
 }
 
-func (s *Store) CreateAPIKey(name, keyHash, keyPrefix, plaintext string) (APIKey, error) {
+func (s *Store) CreateAPIKey(name, keyHash, keyPrefix, plaintext string, permission ...string) (APIKey, error) {
 	now := time.Now().UnixMilli()
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		trimmed = "client"
 	}
+	perm := KeyPermissionRead
+	if len(permission) > 0 {
+		perm = AsKeyPermission(permission[0])
+	}
 	key := APIKey{
-		ID:        security.RandomID(),
-		Name:      trimmed,
-		KeyPrefix: keyPrefix,
-		Plaintext: plaintext,
-		CreatedAt: now,
+		ID:         security.RandomID(),
+		Name:       trimmed,
+		KeyPrefix:  keyPrefix,
+		Plaintext:  plaintext,
+		Permission: perm,
+		CreatedAt:  now,
 	}
 	_, err := s.db.Exec(`
-      INSERT INTO api_keys (id, name, key_hash, key_prefix, plaintext, created_at, last_used_at, revoked_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
-		key.ID, key.Name, keyHash, keyPrefix, plaintext, now,
+      INSERT INTO api_keys (id, name, key_hash, key_prefix, plaintext, permission, created_at, last_used_at, revoked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+		key.ID, key.Name, keyHash, keyPrefix, plaintext, perm, now,
 	)
 	return key, err
 }
 
 func (s *Store) ListAPIKeys() ([]APIKey, error) {
 	rows, err := s.db.Query(`
-      SELECT id, name, key_prefix, plaintext, created_at, last_used_at, revoked_at
+      SELECT id, name, key_prefix, plaintext, permission, created_at, last_used_at, revoked_at
       FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -478,9 +536,10 @@ func (s *Store) ListAPIKeys() ([]APIKey, error) {
 	for rows.Next() {
 		var key APIKey
 		var lastUsed, revoked sql.NullInt64
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.Plaintext, &key.CreatedAt, &lastUsed, &revoked); err != nil {
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.Plaintext, &key.Permission, &key.CreatedAt, &lastUsed, &revoked); err != nil {
 			return nil, err
 		}
+		key.Permission = AsKeyPermission(key.Permission)
 		key.LastUsedAt = nullInt(lastUsed)
 		key.RevokedAt = nullInt(revoked)
 		keys = append(keys, key)
@@ -488,16 +547,51 @@ func (s *Store) ListAPIKeys() ([]APIKey, error) {
 	return keys, rows.Err()
 }
 
-func (s *Store) FindActiveAPIKeyByHash(keyHash string) (id string, name string, ok bool, err error) {
-	row := s.db.QueryRow(`
-      SELECT id, name FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL`, keyHash)
-	if err := row.Scan(&id, &name); err != nil {
+func (s *Store) GetAPIKey(id string) (*APIKey, error) {
+	var key APIKey
+	var lastUsed, revoked sql.NullInt64
+	err := s.db.QueryRow(`
+      SELECT id, name, key_prefix, plaintext, permission, created_at, last_used_at, revoked_at
+      FROM api_keys WHERE id = ?`, id).Scan(
+		&key.ID, &key.Name, &key.KeyPrefix, &key.Plaintext, &key.Permission, &key.CreatedAt, &lastUsed, &revoked,
+	)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", "", false, nil
+			return nil, nil
 		}
-		return "", "", false, err
+		return nil, err
 	}
-	return id, name, true, nil
+	key.Permission = AsKeyPermission(key.Permission)
+	key.LastUsedAt = nullInt(lastUsed)
+	key.RevokedAt = nullInt(revoked)
+	return &key, nil
+}
+
+func (s *Store) SetAPIKeyPermission(id, permission string) (*APIKey, error) {
+	existing, err := s.GetAPIKey(id)
+	if err != nil || existing == nil {
+		return existing, err
+	}
+	perm := AsKeyPermission(permission)
+	if _, err := s.db.Exec(`UPDATE api_keys SET permission = ? WHERE id = ?`, perm, id); err != nil {
+		return nil, err
+	}
+	existing.Permission = perm
+	return existing, nil
+}
+
+func (s *Store) FindActiveAPIKeyByHash(keyHash string) (key APIKey, ok bool, err error) {
+	var permission string
+	row := s.db.QueryRow(`
+      SELECT id, name, permission FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL`, keyHash)
+	if err := row.Scan(&key.ID, &key.Name, &permission); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return APIKey{}, false, nil
+		}
+		return APIKey{}, false, err
+	}
+	key.Permission = AsKeyPermission(permission)
+	return key, true, nil
 }
 
 func (s *Store) TouchAPIKey(id string) error {
@@ -611,7 +705,10 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("hosts", "visibility", `TEXT NOT NULL DEFAULT 'all'`); err != nil {
 		return err
 	}
-	return s.ensureColumn("hosts", "visible_key_ids_json", `TEXT NOT NULL DEFAULT '[]'`)
+	if err := s.ensureColumn("hosts", "visible_key_ids_json", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	return s.ensureColumn("api_keys", "permission", `TEXT NOT NULL DEFAULT 'read'`)
 }
 
 func (s *Store) ensureColumn(table, name, ddl string) error {
@@ -692,23 +789,34 @@ func (s *Store) AddGroup(path string) ([]string, error) {
 	return s.ListGroups()
 }
 
-func (s *Store) DeleteGroup(path string) ([]string, error) {
+func (s *Store) DeleteGroup(path string, deleteHosts bool) ([]string, error) {
 	normalized := NormalizeGroupPath(path)
 	if normalized == "" {
 		return nil, errors.New("group path is required")
 	}
-	parent := parentGroupPath(normalized)
 	hosts, err := s.ListHosts()
 	if err != nil {
 		return nil, err
 	}
-	for _, host := range hosts {
-		nextGroup, changed := rebaseGroupAfterDelete(host.Group, normalized, parent)
-		if !changed {
-			continue
+	if deleteHosts {
+		for _, host := range hosts {
+			if !hostInGroupTree(host.Group, normalized) {
+				continue
+			}
+			if _, err := s.DeleteHost(host.ID); err != nil {
+				return nil, err
+			}
 		}
-		if _, err := s.db.Exec("UPDATE hosts SET group_path = ?, updated_at = ? WHERE id = ?", nextGroup, time.Now().UnixMilli(), host.ID); err != nil {
-			return nil, err
+	} else {
+		parent := parentGroupPath(normalized)
+		for _, host := range hosts {
+			nextGroup, changed := rebaseGroupAfterDelete(host.Group, normalized, parent)
+			if !changed {
+				continue
+			}
+			if _, err := s.db.Exec("UPDATE hosts SET group_path = ?, updated_at = ? WHERE id = ?", nextGroup, time.Now().UnixMilli(), host.ID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	current, err := s.ListGroups()
@@ -920,6 +1028,14 @@ func rebaseGroupAfterDelete(group, deleted, parent string) (string, bool) {
 	return current, false
 }
 
+func hostInGroupTree(group, deleted string) bool {
+	current := NormalizeGroupPath(group)
+	if current == "" || deleted == "" {
+		return false
+	}
+	return current == deleted || strings.HasPrefix(current, deleted+"/")
+}
+
 func parseStoredGroupPaths(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return []string{}
@@ -1000,6 +1116,24 @@ func asVisibility(value string) string {
 		return "keys"
 	}
 	return "all"
+}
+
+const (
+	KeyPermissionRead      = "read"
+	KeyPermissionReadWrite = "readwrite"
+)
+
+func AsKeyPermission(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case KeyPermissionReadWrite, "read-write", "rw", "write":
+		return KeyPermissionReadWrite
+	default:
+		return KeyPermissionRead
+	}
+}
+
+func KeyCanWrite(permission string) bool {
+	return AsKeyPermission(permission) == KeyPermissionReadWrite
 }
 
 func parseStoredIDs(raw string) []string {

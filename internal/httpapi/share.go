@@ -9,6 +9,7 @@ import (
 
 	"netcatty-center/internal/security"
 	"netcatty-center/internal/share"
+	"netcatty-center/internal/store"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -19,7 +20,7 @@ var shareUpgrader = websocket.Upgrader{
 }
 
 func (s *Server) createShareRoom(c *gin.Context) {
-	keyHash, ok := s.requireClientAPIKey(c)
+	auth, ok := s.requireClientAPIKey(c)
 	if !ok {
 		return
 	}
@@ -29,7 +30,7 @@ func (s *Server) createShareRoom(c *gin.Context) {
 		Rows  int    `json:"rows"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	room, err := s.hub.CreateRoom(keyHash, strings.TrimSpace(body.Label), body.Cols, body.Rows)
+	room, err := s.hub.CreateRoom(auth.Hash, strings.TrimSpace(body.Label), body.Cols, body.Rows)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -44,7 +45,7 @@ func (s *Server) createShareRoom(c *gin.Context) {
 }
 
 func (s *Server) joinShareRoom(c *gin.Context) {
-	keyHash, ok := s.requireClientAPIKey(c)
+	auth, ok := s.requireClientAPIKey(c)
 	if !ok {
 		return
 	}
@@ -55,7 +56,7 @@ func (s *Server) joinShareRoom(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "请求无效")
 		return
 	}
-	rateKey := keyHash + "|" + clientIP(c)
+	rateKey := auth.Hash + "|" + clientIP(c)
 	room, guestToken, err := s.hub.JoinByPIN(strings.TrimSpace(body.Pin), rateKey)
 	if err != nil {
 		status := http.StatusUnauthorized
@@ -77,11 +78,11 @@ func (s *Server) joinShareRoom(c *gin.Context) {
 }
 
 func (s *Server) deleteShareRoom(c *gin.Context) {
-	keyHash, ok := s.requireClientAPIKey(c)
+	auth, ok := s.requireClientAPIKey(c)
 	if !ok {
 		return
 	}
-	room, ok := s.hub.CloseRoom(c.Param("id"), keyHash)
+	room, ok := s.hub.CloseRoom(c.Param("id"), auth.Hash)
 	if !ok {
 		fail(c, http.StatusNotFound, "分享不存在或无权关闭")
 		return
@@ -216,27 +217,51 @@ func (s *Server) runShareGuest(conn *websocket.Conn, roomID, token string) {
 	}
 }
 
-func (s *Server) requireClientAPIKey(c *gin.Context) (string, bool) {
+type clientAuth struct {
+	ID         string
+	Name       string
+	Hash       string
+	Permission string
+}
+
+func (s *Server) requireClientAPIKey(c *gin.Context) (clientAuth, bool) {
 	plaintext := extractAPIKey(c)
 	if plaintext == "" {
 		fail(c, http.StatusUnauthorized, "缺少客户端密钥。请使用 Authorization: Bearer <key>")
-		return "", false
+		return clientAuth{}, false
 	}
 	if !security.ValidAPIKeyFormat(plaintext) {
 		fail(c, http.StatusUnauthorized, "密钥格式无效")
-		return "", false
+		return clientAuth{}, false
 	}
-	id, _, ok, err := s.store.FindActiveAPIKeyByHash(security.SHA256Hex(plaintext))
+	key, ok, err := s.store.FindActiveAPIKeyByHash(security.SHA256Hex(plaintext))
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
-		return "", false
+		return clientAuth{}, false
 	}
 	if !ok {
 		fail(c, http.StatusUnauthorized, "密钥无效或已吊销")
-		return "", false
+		return clientAuth{}, false
 	}
-	_ = s.store.TouchAPIKey(id)
-	return security.SHA256Hex(plaintext), true
+	_ = s.store.TouchAPIKey(key.ID)
+	return clientAuth{
+		ID:         key.ID,
+		Name:       key.Name,
+		Hash:       security.SHA256Hex(plaintext),
+		Permission: key.Permission,
+	}, true
+}
+
+func (s *Server) requireClientCatalogWrite(c *gin.Context) (clientAuth, bool) {
+	auth, ok := s.requireClientAPIKey(c)
+	if !ok {
+		return auth, false
+	}
+	if !store.KeyCanWrite(auth.Permission) {
+		fail(c, http.StatusForbidden, "此密钥为只读，不能修改机器列表")
+		return auth, false
+	}
+	return auth, true
 }
 
 func clientIP(c *gin.Context) string {

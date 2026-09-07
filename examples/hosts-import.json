@@ -1,0 +1,74 @@
+{
+  "groups": [
+    "production",
+    "production/web",
+    "production/jump",
+    "network",
+    "staging/empty"
+  ],
+  "hosts": [
+    {
+      "label": "prod-web-1",
+      "hostname": "10.0.1.12",
+      "port": 22,
+      "username": "deploy",
+      "group": "production/web",
+      "tags": ["linux", "prod"],
+      "os": "linux",
+      "protocol": "ssh",
+      "deviceType": "general",
+      "notes": "生产入口机。导入后可在后台改密码。",
+      "password": "change-me",
+      "privateKey": "",
+      "passphrase": "",
+      "startupCommand": "tmux attach || tmux new -s ops",
+      "startupCommandRunMode": "paste",
+      "startupCommandRules": [],
+      "visibility": "all",
+      "visibleKeyIds": []
+    },
+    {
+      "label": "prod-jump",
+      "hostname": "10.0.1.5",
+      "port": 22,
+      "username": "ops",
+      "group": "production/jump",
+      "tags": ["jump", "prod"],
+      "os": "linux",
+      "protocol": "ssh",
+      "deviceType": "general",
+      "notes": "跳板机：先登录本机，再按规则跳到内网。",
+      "password": "jump-secret",
+      "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nTEST-IMPORT-KEY-NOT-FOR-PRODUCTION\n-----END OPENSSH PRIVATE KEY-----",
+      "passphrase": "key-passphrase",
+      "startupCommand": "",
+      "startupCommandRunMode": "rules",
+      "startupCommandRules": [
+        { "expect": "password:", "send": "inner-secret" },
+        { "expect": "", "send": "ssh deploy@10.0.1.12" }
+      ],
+      "visibility": "all",
+      "visibleKeyIds": []
+    },
+    {
+      "label": "core-sw-1",
+      "hostname": "10.0.9.1",
+      "port": 23,
+      "username": "admin",
+      "group": "network",
+      "tags": ["switch"],
+      "os": "linux",
+      "protocol": "telnet",
+      "deviceType": "network",
+      "notes": "核心交换机，逐行发送登录命令。",
+      "password": "cisco",
+      "privateKey": "",
+      "passphrase": "",
+      "startupCommand": "enable\nshow version",
+      "startupCommandRunMode": "lineDelay",
+      "startupCommandRules": [],
+      "visibility": "all",
+      "visibleKeyIds": []
+    }
+  ]
+}

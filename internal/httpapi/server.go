@@ -43,6 +43,12 @@ func (s *Server) Engine() *gin.Engine {
 func (s *Server) routes() {
 	s.engine.GET("/api/v1/health", s.health)
 	s.engine.GET("/api/v1/catalog", s.catalog)
+	s.engine.POST("/api/v1/hosts", s.clientCreateHost)
+	s.engine.PUT("/api/v1/hosts/:id", s.clientUpdateHost)
+	s.engine.DELETE("/api/v1/hosts/:id", s.clientDeleteHost)
+	s.engine.POST("/api/v1/hosts/import", s.clientImportHosts)
+	s.engine.POST("/api/v1/groups", s.clientCreateGroup)
+	s.engine.POST("/api/v1/groups/delete", s.clientDeleteGroup)
 	s.engine.POST("/api/v1/share/rooms", s.createShareRoom)
 	s.engine.POST("/api/v1/share/join", s.joinShareRoom)
 	s.engine.DELETE("/api/v1/share/rooms/:id", s.deleteShareRoom)
@@ -55,6 +61,8 @@ func (s *Server) routes() {
 	s.engine.GET("/api/admin/me", s.requireAdmin, s.me)
 
 	s.engine.GET("/api/admin/hosts", s.requireAdmin, s.listHosts)
+	s.engine.GET("/api/admin/hosts/export", s.requireAdmin, s.exportHosts)
+	s.engine.POST("/api/admin/hosts/import", s.requireAdmin, s.importHosts)
 	s.engine.POST("/api/admin/hosts", s.requireAdmin, s.createHost)
 	s.engine.PUT("/api/admin/hosts/:id", s.requireAdmin, s.updateHost)
 	s.engine.DELETE("/api/admin/hosts/:id", s.requireAdmin, s.deleteHost)
@@ -64,6 +72,7 @@ func (s *Server) routes() {
 
 	s.engine.GET("/api/admin/keys", s.requireAdmin, s.listKeys)
 	s.engine.POST("/api/admin/keys", s.requireAdmin, s.createKey)
+	s.engine.PUT("/api/admin/keys/:id", s.requireAdmin, s.updateKey)
 	s.engine.POST("/api/admin/keys/:id/restore", s.requireAdmin, s.restoreKey)
 	s.engine.POST("/api/admin/keys/:id/delete", s.requireAdmin, s.deleteKey)
 	s.engine.DELETE("/api/admin/keys/:id", s.requireAdmin, s.revokeKey)
@@ -92,25 +101,10 @@ func (s *Server) health(c *gin.Context) {
 }
 
 func (s *Server) catalog(c *gin.Context) {
-	plaintext := extractAPIKey(c)
-	if plaintext == "" {
-		fail(c, http.StatusUnauthorized, "缺少客户端密钥。请使用 Authorization: Bearer <key>")
-		return
-	}
-	if !security.ValidAPIKeyFormat(plaintext) {
-		fail(c, http.StatusUnauthorized, "密钥格式无效")
-		return
-	}
-	id, _, ok, err := s.store.FindActiveAPIKeyByHash(security.SHA256Hex(plaintext))
-	if err != nil {
-		fail(c, http.StatusInternalServerError, err.Error())
-		return
-	}
+	auth, ok := s.requireClientAPIKey(c)
 	if !ok {
-		fail(c, http.StatusUnauthorized, "密钥无效或已吊销")
 		return
 	}
-	_ = s.store.TouchAPIKey(id)
 	settings, err := s.store.Settings()
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -124,7 +118,7 @@ func (s *Server) catalog(c *gin.Context) {
 	catalog := make([]store.CatalogHost, 0, len(hosts))
 	visible := make([]store.Host, 0, len(hosts))
 	for _, host := range hosts {
-		if !host.VisibleToKey(id) {
+		if !host.VisibleToKey(auth.ID) {
 			continue
 		}
 		visible = append(visible, host)
@@ -141,6 +135,7 @@ func (s *Server) catalog(c *gin.Context) {
 			"id":   settings.CenterID,
 			"name": settings.CenterName,
 		},
+		"permission":  auth.Permission,
 		"generatedAt": time.Now().UnixMilli(),
 		"groups":      groups,
 		"hosts":       catalog,
@@ -321,13 +316,14 @@ func (s *Server) createGroup(c *gin.Context) {
 
 func (s *Server) deleteGroup(c *gin.Context) {
 	var body struct {
-		Path string `json:"path"`
+		Path        string `json:"path"`
+		DeleteHosts bool   `json:"deleteHosts"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Path) == "" {
 		fail(c, http.StatusBadRequest, "分组路径不能为空")
 		return
 	}
-	groups, err := s.store.DeleteGroup(body.Path)
+	groups, err := s.store.DeleteGroup(body.Path, body.DeleteHosts)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
@@ -396,7 +392,8 @@ func (s *Server) listKeys(c *gin.Context) {
 
 func (s *Server) createKey(c *gin.Context) {
 	var body struct {
-		Name string `json:"name"`
+		Name       string `json:"name"`
+		Permission string `json:"permission"`
 	}
 	_ = c.ShouldBindJSON(&body)
 	name := strings.TrimSpace(body.Name)
@@ -404,7 +401,7 @@ func (s *Server) createKey(c *gin.Context) {
 		name = "Netcatty 客户端"
 	}
 	generated := security.GenerateAPIKey()
-	key, err := s.store.CreateAPIKey(name, generated.Hash, generated.Prefix, generated.Plaintext)
+	key, err := s.store.CreateAPIKey(name, generated.Hash, generated.Prefix, generated.Plaintext, body.Permission)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -412,6 +409,26 @@ func (s *Server) createKey(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"key": key,
 	})
+}
+
+func (s *Server) updateKey(c *gin.Context) {
+	var body struct {
+		Permission string `json:"permission"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		fail(c, http.StatusBadRequest, "请求无效")
+		return
+	}
+	key, err := s.store.SetAPIKeyPermission(c.Param("id"), body.Permission)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if key == nil {
+		fail(c, http.StatusNotFound, "密钥不存在")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"key": key})
 }
 
 func (s *Server) revokeKey(c *gin.Context) {
@@ -588,7 +605,11 @@ func bindHostInput(c *gin.Context) (store.HostInput, error) {
 	if err := c.ShouldBindJSON(&raw); err != nil {
 		return store.HostInput{}, errors.New("请求无效")
 	}
-	input := store.HostInput{
+	return hostInputFromRaw(raw), nil
+}
+
+func hostInputFromRaw(raw map[string]json.RawMessage) store.HostInput {
+	return store.HostInput{
 		Label:                 asString(raw["label"]),
 		Hostname:              asString(raw["hostname"]),
 		Port:                  asInt(raw["port"], 22),
@@ -608,7 +629,6 @@ func bindHostInput(c *gin.Context) (store.HostInput, error) {
 		Visibility:            asString(raw["visibility"]),
 		VisibleKeyIDs:         asIDs(raw["visibleKeyIds"]),
 	}
-	return input, nil
 }
 
 func asString(raw json.RawMessage) string {

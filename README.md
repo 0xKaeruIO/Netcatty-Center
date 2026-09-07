@@ -9,7 +9,9 @@
 - 用启动参数或环境变量指定管理员账号（不写入数据库）
 - 管理员增删改主机（含登录密码、密钥、启动命令 / Expect-Send 规则，以及目录可见范围）
 - 主机按 `group` 路径（如 `production/web`）做树状目录展示，支持展开全部 / 折叠全部；空分组也会随 catalog 的 `groups` 下发
-- 签发、吊销、重新启用或彻底删除客户端 API 密钥
+- 可从 JSON 导入主机（含密码、私钥、启动命令 / Expect-Send 规则、分组等后台可配字段），示例见 `examples/hosts-import.json`
+- 可将当前主机目录导出为同样的明文 JSON（含密码、私钥），可再导回后台
+- 签发、吊销、重新启用或彻底删除客户端 API 密钥；密钥分 **只读**（默认）和 **可读可写**。只读可拉取机器列表并开启/加入/关闭分享，不能改机器列表
 - `GET /api/v1/catalog` 按密钥可见范围下发主机
 
 ## 启动
@@ -106,5 +108,6 @@ internal/store/    SQLite
 internal/security/ 密码与 API 密钥
 internal/httpapi/  Gin 路由（管理员会话 + catalog）
 public/            管理后台页面
+examples/          主机 JSON 导入示例
 data/              运行时数据库（不入库）
 ```

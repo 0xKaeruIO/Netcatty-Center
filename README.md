@@ -2,12 +2,13 @@
 
 运维服务器组织中心。管理员在独立后台维护主机目录；之后 Netcatty 客户端用 **地址 + 密钥** 拉取这份目录。
 
-当前仓库只包含服务端（Go + Gin）。Netcatty 客户端尚未改动。
+服务端在本仓库（Go + Gin）。Netcatty 客户端同步 catalog 时会把 `groups` 和主机 `group` 挂到中心名称下，保留同一套目录树。
 
 ## 能做什么
 
 - 用启动参数或环境变量指定管理员账号（不写入数据库）
 - 管理员增删改主机（含登录密码、密钥、启动命令 / Expect-Send 规则，以及目录可见范围）
+- 主机按 `group` 路径（如 `production/web`）做树状目录展示，支持展开全部 / 折叠全部；空分组也会随 catalog 的 `groups` 下发
 - 签发、吊销、重新启用或彻底删除客户端 API 密钥
 - `GET /api/v1/catalog` 按密钥可见范围下发主机
 
@@ -48,7 +49,7 @@ go build -o center.exe ./cmd/center
 
 未提供启动参数时，仍可走首次初始化，把管理员写进 SQLite（兼容旧部署）。
 
-## 客户端约定（尚未接入）
+## 客户端约定
 
 配置两项：
 
@@ -68,6 +69,7 @@ curl -H "Authorization: Bearer ncc_你的密钥" http://127.0.0.1:4780/api/v1/ca
   "version": 1,
   "center": { "id": "...", "name": "Netcatty Center" },
   "generatedAt": 1710000000000,
+  "groups": ["production", "production/web"],
   "hosts": [
     {
       "id": "...",

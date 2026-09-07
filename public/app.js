@@ -4,10 +4,12 @@ const state = {
   needsSetup: false,
   view: "hosts",
   hosts: [],
+  groups: [],
   keys: [],
   error: "",
   notice: "",
   query: "",
+  expandedPaths: null,
   editing: null,
 };
 
@@ -75,6 +77,7 @@ async function loadWorkspace() {
     api("/api/admin/keys"),
   ]);
   state.hosts = hosts.hosts;
+  state.groups = hosts.groups || [];
   state.keys = keys.keys;
   render();
 }
@@ -196,19 +199,23 @@ function navBtn(id, label) {
 
 function renderHosts() {
   const q = state.query.trim().toLowerCase();
-  const rows = state.hosts.filter((host) => {
+  const filtered = state.hosts.filter((host) => {
     if (!q) return true;
     return [host.label, host.hostname, host.username, host.group, ...(host.tags || [])]
       .join(" ")
       .toLowerCase()
       .includes(q);
   });
+  const { tree, ungrouped } = buildGroupTree(filtered, q ? [] : state.groups);
+  const allPaths = collectGroupPaths(tree);
+  const searching = q !== "";
+  const hasTree = tree.length > 0 || ungrouped.length > 0;
 
   return h("section", {},
     h("div", { class: "page-head" },
       h("div", {},
         h("h1", {}, "主机目录"),
-        h("p", {}, `${state.hosts.length} 台主机。客户端拉取时只包含连接元数据，不含密码或私钥。`),
+        h("p", {}, `${state.hosts.length} 台主机。分组用 / 表示嵌套，客户端同步后会保留同样的目录结构。`),
       ),
       h("div", { class: "toolbar" },
         h("input", {
@@ -221,6 +228,10 @@ function renderHosts() {
           },
         }),
         h("button", {
+          class: "btn",
+          onClick: () => createGroup(""),
+        }, "新建分组"),
+        h("button", {
           class: "btn btn-primary",
           onClick: () => {
             state.editing = emptyHost();
@@ -230,47 +241,201 @@ function renderHosts() {
       ),
     ),
     state.error ? h("div", { class: "banner error" }, state.error) : null,
-    rows.length === 0
-      ? h("div", { class: "empty" }, "还没有主机。添加第一台后，客户端即可按密钥拉取。")
-      : h("div", { class: "table-wrap" },
-        h("table", {},
-          h("thead", {}, h("tr", {},
-            h("th", {}, "名称"),
-            h("th", {}, "地址"),
-            h("th", {}, "用户"),
-            h("th", {}, "登录"),
-            h("th", {}, "分组"),
-            h("th", {}, "可见"),
-            h("th", {}, "标签"),
-            h("th", {}, ""),
-          )),
-          h("tbody", {}, rows.map((host) => h("tr", {},
-            h("td", {},
-              h("div", {}, host.label),
-              h("div", { class: "mono", style: "color:var(--muted);font-size:12px" }, host.protocol.toUpperCase()),
-            ),
-            h("td", { class: "mono" }, `${host.hostname}:${host.port}`),
-            h("td", { class: "mono" }, host.username || "—"),
-            h("td", {}, hostAuthLabel(host)),
-            h("td", {}, host.group || "—"),
-            h("td", {}, hostVisibilityLabel(host)),
-            h("td", {}, (host.tags || []).map((tag) => h("span", { class: "tag" }, tag))),
-            h("td", {}, h("div", { class: "row-actions" },
-              h("button", { class: "btn", onClick: () => { state.editing = cloneHostForEdit(host); render(); } }, "编辑"),
-              h("button", {
-                class: "btn btn-danger",
-                onClick: async () => {
-                  if (!confirm(`删除主机 ${host.label}？`)) return;
-                  await api(`/api/admin/hosts/${host.id}`, { method: "DELETE" });
-                  await loadWorkspace();
-                },
-              }, "删除"),
-            )),
-          ))),
-        ),
+    !hasTree
+      ? h("div", { class: "empty" }, q ? "没有匹配的主机。" : "还没有主机或分组。添加第一台后，客户端即可按密钥拉取。")
+      : h("div", { class: "tree-wrap" },
+        tree.length > 0
+          ? h("div", { class: "tree-toolbar" },
+            h("button", {
+              class: "btn",
+              disabled: searching,
+              onClick: () => {
+                state.expandedPaths = new Set(allPaths);
+                render();
+              },
+            }, "展开全部"),
+            h("button", {
+              class: "btn",
+              disabled: searching,
+              onClick: () => {
+                state.expandedPaths = new Set();
+                render();
+              },
+            }, "折叠全部"),
+          )
+          : null,
+        ...ungrouped.map((host) => renderHostRow(host, 0)),
+        ...tree.flatMap((node) => renderGroupNode(node, 0, searching)),
       ),
     state.editing ? renderHostDrawer() : null,
   );
+}
+
+function isExpanded(path, searching) {
+  if (searching) return true;
+  if (state.expandedPaths == null) return true;
+  return state.expandedPaths.has(path);
+}
+
+function toggleExpanded(path) {
+  const next = new Set(state.expandedPaths ?? collectGroupPaths(buildGroupTree(state.hosts, state.groups).tree));
+  if (next.has(path)) next.delete(path);
+  else next.add(path);
+  state.expandedPaths = next;
+  render();
+}
+
+function renderGroupNode(node, depth, searching) {
+  const open = isExpanded(node.path, searching);
+  const rows = [
+    h("div", { class: "tree-row tree-group", style: `--depth:${depth}` },
+      h("button", {
+        class: "tree-toggle",
+        type: "button",
+        onClick: () => toggleExpanded(node.path),
+      }, open ? "▾" : "▸"),
+      h("div", { class: "tree-main", onClick: () => toggleExpanded(node.path) },
+        h("strong", {}, node.name),
+        h("span", { class: "tree-meta" }, `${node.totalHostCount} 台`, " · ", node.path),
+      ),
+      h("div", { class: "row-actions" },
+        h("button", {
+          class: "btn",
+          onClick: () => createGroup(node.path),
+        }, "子分组"),
+        h("button", {
+          class: "btn",
+          onClick: () => {
+            const host = emptyHost();
+            host.group = node.path;
+            state.editing = host;
+            render();
+          },
+        }, "添加主机"),
+        h("button", {
+          class: "btn btn-danger",
+          onClick: async () => {
+            if (!confirm(`删除分组 ${node.path}？其中的主机会移到上一级。`)) return;
+            const result = await api("/api/admin/groups/delete", { method: "POST", body: { path: node.path } });
+            state.groups = result.groups || [];
+            state.hosts = result.hosts || state.hosts;
+            render();
+          },
+        }, "删除"),
+      ),
+    ),
+  ];
+  if (!open) return rows;
+  for (const host of node.hosts) {
+    rows.push(renderHostRow(host, depth + 1));
+  }
+  const children = Object.values(node.children).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  for (const child of children) {
+    rows.push(...renderGroupNode(child, depth + 1, searching));
+  }
+  return rows;
+}
+
+function renderHostRow(host, depth) {
+  return h("div", { class: "tree-row tree-host", style: `--depth:${depth}` },
+    h("span", { class: "tree-toggle tree-toggle-spacer" }, ""),
+    h("div", { class: "tree-main" },
+      h("div", {}, host.label),
+      h("div", { class: "tree-meta mono" },
+        `${host.hostname}:${host.port}`,
+        host.username ? ` · ${host.username}` : "",
+        ` · ${host.protocol.toUpperCase()}`,
+        ` · ${hostAuthLabel(host)}`,
+        ` · ${hostVisibilityLabel(host)}`,
+      ),
+      h("div", {}, (host.tags || []).map((tag) => h("span", { class: "tag" }, tag))),
+    ),
+    h("div", { class: "row-actions" },
+      h("button", { class: "btn", onClick: () => { state.editing = cloneHostForEdit(host); render(); } }, "编辑"),
+      h("button", {
+        class: "btn btn-danger",
+        onClick: async () => {
+          if (!confirm(`删除主机 ${host.label}？`)) return;
+          await api(`/api/admin/hosts/${host.id}`, { method: "DELETE" });
+          await loadWorkspace();
+        },
+      }, "删除"),
+    ),
+  );
+}
+
+function buildGroupTree(hosts, customGroups) {
+  const root = {};
+  const insertPath = (path, host) => {
+    const parts = String(path || "").split("/").map((part) => part.trim()).filter(Boolean);
+    let level = root;
+    let current = "";
+    parts.forEach((part, index) => {
+      current = current ? `${current}/${part}` : part;
+      if (!level[part]) {
+        level[part] = { name: part, path: current, children: {}, hosts: [], totalHostCount: 0 };
+      }
+      if (host && index === parts.length - 1) {
+        level[part].hosts.push(host);
+      }
+      level = level[part].children;
+    });
+  };
+  for (const path of customGroups || []) {
+    if (path) insertPath(path);
+  }
+  const ungrouped = [];
+  for (const host of hosts) {
+    if (host.group && String(host.group).trim()) insertPath(host.group, host);
+    else ungrouped.push(host);
+  }
+  const countHosts = (node) => {
+    let total = node.hosts.length;
+    for (const child of Object.values(node.children)) {
+      total += countHosts(child);
+    }
+    node.totalHostCount = total;
+    return total;
+  };
+  const tree = Object.values(root).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  tree.forEach(countHosts);
+  return { tree, ungrouped };
+}
+
+function collectGroupPaths(nodes) {
+  const paths = [];
+  const walk = (node) => {
+    paths.push(node.path);
+    for (const child of Object.values(node.children)) walk(child);
+  };
+  for (const node of nodes) walk(node);
+  return paths;
+}
+
+async function createGroup(parentPath) {
+  const name = prompt(parentPath ? `在 ${parentPath} 下新建子分组` : "新建根分组", "");
+  if (name == null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  if (/[\\/]/.test(trimmed)) {
+    state.error = "分组名称不能包含 /";
+    render();
+    return;
+  }
+  const path = parentPath ? `${parentPath}/${trimmed}` : trimmed;
+  try {
+    const result = await api("/api/admin/groups", { method: "POST", body: { path } });
+    state.groups = result.groups || [];
+    if (state.expandedPaths) {
+      for (const ancestor of path.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"))) {
+        state.expandedPaths.add(ancestor);
+      }
+    }
+    render();
+  } catch (err) {
+    state.error = err.message;
+    render();
+  }
 }
 
 function emptyHost() {
@@ -359,7 +524,7 @@ function renderHostDrawer() {
       ),
       h("div", { class: "grid-2" },
         field("用户名", bind(host, "username", { class: "mono" })),
-        field("分组", bind(host, "group", { placeholder: "production/web" })),
+        field("分组（用 / 嵌套，例如 production/web）", bind(host, "group", { placeholder: "production/web" })),
       ),
       field("标签（逗号分隔）", bind(host, "tags", {
         value: Array.isArray(host.tags) ? host.tags.join(", ") : host.tags,

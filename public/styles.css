@@ -445,6 +445,46 @@ tr:last-child td { border-bottom: 0; }
   min-width: 220px;
 }
 
+.tree-wrap {
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+.tree-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tree-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px 12px 10px calc(12px + var(--depth, 0) * 18px);
+  border-bottom: 1px solid var(--line);
+}
+.tree-row:last-child { border-bottom: 0; }
+.tree-group { background: #18160f; }
+.tree-group:hover,
+.tree-host:hover { background: #242017; }
+.tree-toggle {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--brass);
+  cursor: pointer;
+}
+.tree-toggle-spacer { display: inline-block; width: 24px; height: 24px; }
+.tree-main { min-width: 0; cursor: default; }
+.tree-group .tree-main { cursor: pointer; }
+.tree-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
 @media (max-width: 860px) {
   .app-shell, .auth-screen { grid-template-columns: 1fr; }
   .rail { border-right: 0; border-bottom: 1px solid var(--line); }

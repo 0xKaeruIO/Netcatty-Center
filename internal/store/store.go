@@ -381,6 +381,9 @@ func (s *Store) CreateHost(input HostInput) (Host, error) {
 	if err != nil {
 		return Host{}, err
 	}
+	if err := s.EnsureGroupPaths(host.Group); err != nil {
+		return Host{}, err
+	}
 	_, err = s.db.Exec(`
       INSERT INTO hosts (
         id, label, hostname, port, username, group_path, tags_json,
@@ -406,6 +409,9 @@ func (s *Store) UpdateHost(id string, input HostInput) (*Host, error) {
 	}
 	host, err := hostFromInput(id, input, existing.CreatedAt, time.Now().UnixMilli())
 	if err != nil {
+		return nil, err
+	}
+	if err := s.EnsureGroupPaths(host.Group); err != nil {
 		return nil, err
 	}
 	_, err = s.db.Exec(`
@@ -646,6 +652,91 @@ func (s *Store) getSetting(key string) (string, error) {
 	return value, err
 }
 
+func (s *Store) ListGroups() ([]string, error) {
+	raw, err := s.getSetting("groups_json")
+	if err != nil {
+		return nil, err
+	}
+	return parseStoredGroupPaths(raw), nil
+}
+
+func (s *Store) SetGroups(groups []string) ([]string, error) {
+	normalized := normalizeGroupPaths(groups)
+	if err := s.setSetting("groups_json", mustJSON(normalized)); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func (s *Store) EnsureGroupPaths(paths ...string) error {
+	current, err := s.ListGroups()
+	if err != nil {
+		return err
+	}
+	next := append([]string{}, current...)
+	for _, path := range paths {
+		next = append(next, AncestorGroupPaths(path)...)
+	}
+	_, err = s.SetGroups(next)
+	return err
+}
+
+func (s *Store) AddGroup(path string) ([]string, error) {
+	normalized := NormalizeGroupPath(path)
+	if normalized == "" {
+		return nil, errors.New("group path is required")
+	}
+	if err := s.EnsureGroupPaths(normalized); err != nil {
+		return nil, err
+	}
+	return s.ListGroups()
+}
+
+func (s *Store) DeleteGroup(path string) ([]string, error) {
+	normalized := NormalizeGroupPath(path)
+	if normalized == "" {
+		return nil, errors.New("group path is required")
+	}
+	parent := parentGroupPath(normalized)
+	hosts, err := s.ListHosts()
+	if err != nil {
+		return nil, err
+	}
+	for _, host := range hosts {
+		nextGroup, changed := rebaseGroupAfterDelete(host.Group, normalized, parent)
+		if !changed {
+			continue
+		}
+		if _, err := s.db.Exec("UPDATE hosts SET group_path = ?, updated_at = ? WHERE id = ?", nextGroup, time.Now().UnixMilli(), host.ID); err != nil {
+			return nil, err
+		}
+	}
+	current, err := s.ListGroups()
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]string, 0, len(current))
+	for _, group := range current {
+		if group == normalized || strings.HasPrefix(group, normalized+"/") {
+			continue
+		}
+		kept = append(kept, group)
+	}
+	return s.SetGroups(kept)
+}
+
+func (s *Store) CatalogGroups(visible []Host) ([]string, error) {
+	stored, err := s.ListGroups()
+	if err != nil {
+		return nil, err
+	}
+	paths := append([]string{}, stored...)
+	for _, host := range visible {
+		paths = append(paths, AncestorGroupPaths(host.Group)...)
+	}
+	return normalizeGroupPaths(paths), nil
+}
+
 func (s *Store) setSetting(key, value string) error {
 	_, err := s.db.Exec(
 		"INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -742,7 +833,7 @@ func hostFromInput(id string, input HostInput, createdAt, updatedAt int64) (Host
 		Hostname:              hostname,
 		Port:                  port,
 		Username:              strings.TrimSpace(input.Username),
-		Group:                 strings.TrimSpace(input.Group),
+		Group:                 NormalizeGroupPath(input.Group),
 		Tags:                  normalizeTags(input.Tags),
 		OS:                    asOS(input.OS),
 		Protocol:              asProtocol(input.Protocol),
@@ -771,6 +862,88 @@ func (h Host) VisibleToKey(keyID string) bool {
 		}
 	}
 	return false
+}
+
+func NormalizeGroupPath(value string) string {
+	cleaned := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if cleaned == "" {
+		return ""
+	}
+	parts := make([]string, 0)
+	for _, raw := range strings.Split(cleaned, "/") {
+		part := strings.TrimSpace(raw)
+		if part == "" || part == "." || part == ".." {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "/")
+}
+
+func AncestorGroupPaths(path string) []string {
+	normalized := NormalizeGroupPath(path)
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.Split(normalized, "/")
+	out := make([]string, 0, len(parts))
+	for i := range parts {
+		out = append(out, strings.Join(parts[:i+1], "/"))
+	}
+	return out
+}
+
+func parentGroupPath(path string) string {
+	normalized := NormalizeGroupPath(path)
+	if normalized == "" || !strings.Contains(normalized, "/") {
+		return ""
+	}
+	return normalized[:strings.LastIndex(normalized, "/")]
+}
+
+func rebaseGroupAfterDelete(group, deleted, parent string) (string, bool) {
+	current := NormalizeGroupPath(group)
+	if current == "" {
+		return "", false
+	}
+	if current == deleted {
+		return parent, true
+	}
+	prefix := deleted + "/"
+	if strings.HasPrefix(current, prefix) {
+		suffix := strings.TrimPrefix(current, prefix)
+		if parent == "" {
+			return suffix, true
+		}
+		return parent + "/" + suffix, true
+	}
+	return current, false
+}
+
+func parseStoredGroupPaths(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	var groups []string
+	if err := json.Unmarshal([]byte(raw), &groups); err != nil {
+		return []string{}
+	}
+	return normalizeGroupPaths(groups)
+}
+
+func normalizeGroupPaths(groups []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(groups))
+	for _, raw := range groups {
+		for _, path := range AncestorGroupPaths(raw) {
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func parseStoredTags(raw string) []string {

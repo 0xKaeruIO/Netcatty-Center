@@ -83,6 +83,13 @@ func TestCatalogRequiresLiveAPIKey(t *testing.T) {
 	if host["privateKey"] != "-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----" {
 		t.Fatalf("privateKey=%v", host["privateKey"])
 	}
+	if host["group"] != "production/web" {
+		t.Fatalf("group=%v", host["group"])
+	}
+	groups, _ := body["groups"].([]any)
+	if strings.Join(asStringSlice(groups), ",") != "production,production/web" {
+		t.Fatalf("groups=%v", body["groups"])
+	}
 
 	health := httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -528,4 +535,48 @@ func TestCatalogFiltersHostsByVisibleKeys(t *testing.T) {
 	if strings.Join(betaHosts, ",") != "shared" {
 		t.Fatalf("beta hosts=%v", betaHosts)
 	}
+}
+
+func TestCatalogIncludesEmptyGroups(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if _, err := st.CreateFirstAdmin("admin", "password123"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddGroup("staging/empty"); err != nil {
+		t.Fatal(err)
+	}
+	generated := security.GenerateAPIKey()
+	if _, err := st.CreateAPIKey("ci", generated.Hash, generated.Prefix, generated.Plaintext); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, config.Config{PublicDir: testPublicDir(t)})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
+	req.Header.Set("Authorization", "Bearer "+generated.Plaintext)
+	srv.Engine().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("catalog=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Groups []string `json:"groups"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(body.Groups, ",") != "staging,staging/empty" {
+		t.Fatalf("groups=%v", body.Groups)
+	}
+}
+
+func asStringSlice(values []any) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		text, _ := value.(string)
+		out = append(out, text)
+	}
+	return out
 }

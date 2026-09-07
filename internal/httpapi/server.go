@@ -58,6 +58,9 @@ func (s *Server) routes() {
 	s.engine.POST("/api/admin/hosts", s.requireAdmin, s.createHost)
 	s.engine.PUT("/api/admin/hosts/:id", s.requireAdmin, s.updateHost)
 	s.engine.DELETE("/api/admin/hosts/:id", s.requireAdmin, s.deleteHost)
+	s.engine.GET("/api/admin/groups", s.requireAdmin, s.listGroups)
+	s.engine.POST("/api/admin/groups", s.requireAdmin, s.createGroup)
+	s.engine.POST("/api/admin/groups/delete", s.requireAdmin, s.deleteGroup)
 
 	s.engine.GET("/api/admin/keys", s.requireAdmin, s.listKeys)
 	s.engine.POST("/api/admin/keys", s.requireAdmin, s.createKey)
@@ -119,11 +122,18 @@ func (s *Server) catalog(c *gin.Context) {
 		return
 	}
 	catalog := make([]store.CatalogHost, 0, len(hosts))
+	visible := make([]store.Host, 0, len(hosts))
 	for _, host := range hosts {
 		if !host.VisibleToKey(id) {
 			continue
 		}
+		visible = append(visible, host)
 		catalog = append(catalog, store.ToCatalogHost(host))
+	}
+	groups, err := s.store.CatalogGroups(visible)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"version": 1,
@@ -132,6 +142,7 @@ func (s *Server) catalog(c *gin.Context) {
 			"name": settings.CenterName,
 		},
 		"generatedAt": time.Now().UnixMilli(),
+		"groups":      groups,
 		"hosts":       catalog,
 	})
 }
@@ -275,7 +286,58 @@ func (s *Server) listHosts(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"hosts": hosts})
+	groups, err := s.store.ListGroups()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"hosts": hosts, "groups": groups})
+}
+
+func (s *Server) listGroups(c *gin.Context) {
+	groups, err := s.store.ListGroups()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"groups": groups})
+}
+
+func (s *Server) createGroup(c *gin.Context) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Path) == "" {
+		fail(c, http.StatusBadRequest, "分组路径不能为空")
+		return
+	}
+	groups, err := s.store.AddGroup(body.Path)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"groups": groups})
+}
+
+func (s *Server) deleteGroup(c *gin.Context) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Path) == "" {
+		fail(c, http.StatusBadRequest, "分组路径不能为空")
+		return
+	}
+	groups, err := s.store.DeleteGroup(body.Path)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	hosts, err := s.store.ListHosts()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"groups": groups, "hosts": hosts})
 }
 
 func (s *Server) createHost(c *gin.Context) {

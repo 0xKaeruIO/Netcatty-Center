@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,11 +26,7 @@ func setupShareServer(t *testing.T) (*Server, string) {
 	if _, err := st.CreateAPIKey("ci", generated.Hash, generated.Prefix, generated.Plaintext); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return New(st, config.Config{PublicDir: dir}), generated.Plaintext
+	return New(st, config.Config{}), generated.Plaintext
 }
 
 func TestShareRoomRequiresAPIKey(t *testing.T) {

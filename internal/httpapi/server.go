@@ -3,9 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"netcatty-center/internal/security"
 	"netcatty-center/internal/share"
 	"netcatty-center/internal/store"
+	"netcatty-center/public"
 
 	"github.com/gin-gonic/gin"
 )
@@ -80,10 +80,9 @@ func (s *Server) routes() {
 	s.engine.GET("/api/admin/settings", s.requireAdmin, s.getSettings)
 	s.engine.PUT("/api/admin/settings", s.requireAdmin, s.putSettings)
 
-	publicDir := s.config.PublicDir
-	s.engine.StaticFile("/styles.css", filepath.Join(publicDir, "styles.css"))
-	s.engine.StaticFile("/app.js", filepath.Join(publicDir, "app.js"))
 	s.engine.GET("/", s.index)
+	s.engine.GET("/styles.css", s.publicFile("styles.css", "text/css; charset=utf-8"))
+	s.engine.GET("/app.js", s.publicFile("app.js", "text/javascript; charset=utf-8"))
 	s.engine.NoRoute(s.notFound)
 }
 
@@ -571,7 +570,22 @@ func (s *Server) clearSession(c *gin.Context) {
 }
 
 func (s *Server) index(c *gin.Context) {
-	c.File(filepath.Join(s.config.PublicDir, "index.html"))
+	s.writePublic(c, "index.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) publicFile(name, contentType string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.writePublic(c, name, contentType)
+	}
+}
+
+func (s *Server) writePublic(c *gin.Context, name, contentType string) {
+	data, err := fs.ReadFile(public.FS, name)
+	if err != nil {
+		fail(c, http.StatusNotFound, "Not found")
+		return
+	}
+	c.Data(http.StatusOK, contentType, data)
 }
 
 func (s *Server) notFound(c *gin.Context) {
@@ -726,7 +740,3 @@ func cors() gin.HandlerFunc {
 	}
 }
 
-func PublicDirExists(dir string) bool {
-	info, err := os.Stat(filepath.Join(dir, "index.html"))
-	return err == nil && !info.IsDir()
-}

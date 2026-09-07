@@ -23,11 +23,7 @@ func TestExportHostsMatchesImportJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 	login := adminLogin(t, srv)
 
 	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "hosts-import.json"))
@@ -110,11 +106,7 @@ func TestExportHostsRequiresAdmin(t *testing.T) {
 	if _, err := st.CreateFirstAdmin("admin", "password123"); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/hosts/export", nil)

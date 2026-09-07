@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,11 +25,7 @@ func TestAPIKeyDefaultsToReadOnlyAndShareStillWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 	login := adminLogin(t, srv)
 
 	created := httptest.NewRecorder()
@@ -120,11 +114,7 @@ func TestReadWriteKeyCanMutateHostList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 	login := adminLogin(t, srv)
 
 	created := httptest.NewRecorder()
@@ -181,11 +171,7 @@ func TestAdminCanChangeKeyPermission(t *testing.T) {
 		t.Fatalf("permission=%q", key.Permission)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 	login := adminLogin(t, srv)
 
 	updated := httptest.NewRecorder()

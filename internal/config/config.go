@@ -23,7 +23,6 @@ type Config struct {
 	Port          int
 	DataDir       string
 	DBPath        string
-	PublicDir     string
 	CookieSecure  bool
 	AdminUser     string
 	AdminPassword string
@@ -33,13 +32,11 @@ func FromEnv() Config {
 	host := getenv("HOST", "0.0.0.0")
 	port := getenvInt("PORT", 4780)
 	dataDir := getenv("DATA_DIR", "data")
-	publicDir := getenv("NCC_PUBLIC_DIR", "public")
 	return Config{
 		Host:          host,
 		Port:          port,
 		DataDir:       dataDir,
 		DBPath:        filepath.Join(dataDir, "center.sqlite"),
-		PublicDir:     publicDir,
 		CookieSecure:  os.Getenv("NCC_COOKIE_SECURE") == "1",
 		AdminUser:     os.Getenv("NCC_ADMIN_USER"),
 		AdminPassword: os.Getenv("NCC_ADMIN_PASSWORD"),
@@ -53,7 +50,6 @@ func Load(args []string) (Config, error) {
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "listen port")
 	fs.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "SQLite data directory")
-	fs.StringVar(&cfg.PublicDir, "public-dir", cfg.PublicDir, "admin UI directory")
 	fs.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "admin username (not stored)")
 	fs.StringVar(&cfg.AdminPassword, "admin-password", cfg.AdminPassword, "admin password (not stored)")
 	if err := fs.Parse(args); err != nil {

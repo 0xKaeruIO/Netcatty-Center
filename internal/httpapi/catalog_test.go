@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,11 +40,7 @@ func TestCatalogRequiresLiveAPIKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 
 	denied := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
@@ -115,12 +109,7 @@ func TestAdminCanListStoredAPIKeyPlaintext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{PublicDir: dir}
-	srv := New(st, cfg)
+	srv := New(st, config.Config{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(`{"username":"admin","password":"password123"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -183,11 +172,7 @@ func TestCatalogIncludesStartupCommandRules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 
 	ok := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
@@ -234,11 +219,7 @@ func TestAdminHostStartupCommandRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, config.Config{PublicDir: dir})
+	srv := New(st, config.Config{})
 
 	login := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(`{"username":"admin","password":"password123"}`))
@@ -308,15 +289,6 @@ func TestAdminHostStartupCommandRoundTrip(t *testing.T) {
 	}
 }
 
-func testPublicDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 func TestBootstrapAdminLoginDoesNotUseDatabasePassword(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -325,7 +297,6 @@ func TestBootstrapAdminLoginDoesNotUseDatabasePassword(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	srv := New(st, config.Config{
-		PublicDir:     testPublicDir(t),
 		AdminUser:     "ops",
 		AdminPassword: "flag-password",
 	})
@@ -398,7 +369,7 @@ func TestRevokedAPIKeyCanBeRestoredOrDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(st, config.Config{PublicDir: testPublicDir(t)})
+	srv := New(st, config.Config{})
 	login := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(`{"username":"admin","password":"password123"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -505,7 +476,7 @@ func TestCatalogFiltersHostsByVisibleKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(st, config.Config{PublicDir: testPublicDir(t)})
+	srv := New(st, config.Config{})
 	catalogHostnames := func(plaintext string) []string {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
@@ -553,7 +524,7 @@ func TestCatalogIncludesEmptyGroups(t *testing.T) {
 	if _, err := st.CreateAPIKey("ci", generated.Hash, generated.Prefix, generated.Plaintext); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(st, config.Config{PublicDir: testPublicDir(t)})
+	srv := New(st, config.Config{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
 	req.Header.Set("Authorization", "Bearer "+generated.Plaintext)

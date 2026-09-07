@@ -32,6 +32,7 @@ async function api(path, options = {}) {
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
+  attrs = disableAutofillAttrs(tag, attrs);
   for (const [key, value] of Object.entries(attrs)) {
     if (key === "class") el.className = value;
     else if (key.startsWith("on") && typeof value === "function") el.addEventListener(key.slice(2).toLowerCase(), value);
@@ -44,6 +45,41 @@ function h(tag, attrs = {}, ...children) {
     el.append(child.nodeType ? child : document.createTextNode(String(child)));
   }
   return el;
+}
+
+function disableAutofillAttrs(tag, attrs) {
+  const next = { ...attrs };
+  if (tag === "form") {
+    if (next.autocomplete == null) next.autocomplete = "off";
+    return next;
+  }
+  if (tag !== "input" && tag !== "textarea" && tag !== "select") return next;
+  if (next.autocomplete == null) next.autocomplete = "off";
+  if (next.autocorrect == null) next.autocorrect = "off";
+  if (next.autocapitalize == null) next.autocapitalize = "off";
+  if (next.spellcheck == null) next.spellcheck = "false";
+  if (next["data-lpignore"] == null) next["data-lpignore"] = "true";
+  if (next["data-1p-ignore"] == null) next["data-1p-ignore"] = true;
+  if (next["data-bwignore"] == null) next["data-bwignore"] = "true";
+  if (next["data-form-type"] == null) next["data-form-type"] = "other";
+  const type = String(next.type || (tag === "textarea" ? "textarea" : "text")).toLowerCase();
+  if (
+    next.readonly == null
+    && type !== "checkbox"
+    && type !== "radio"
+    && type !== "file"
+    && type !== "hidden"
+    && type !== "button"
+    && type !== "submit"
+  ) {
+    next.readonly = true;
+    const prevFocus = next.onFocus;
+    next.onFocus = (event) => {
+      event.target.removeAttribute("readonly");
+      if (typeof prevFocus === "function") prevFocus(event);
+    };
+  }
+  return next;
 }
 
 function formatTime(ts) {
@@ -128,14 +164,14 @@ function renderAuth(mode) {
     state.error ? h("div", { class: "banner error" }, state.error) : null,
     field("用户名", h("input", {
       required: true,
-      autocomplete: "username",
+      autocomplete: "off",
       onInput: (e) => { username = e.target.value; },
     })),
     field("密码", h("input", {
       type: "password",
       required: true,
       minlength: mode === "setup" ? "8" : undefined,
-      autocomplete: mode === "setup" ? "new-password" : "current-password",
+      autocomplete: "off",
       onInput: (e) => { password = e.target.value; },
     })),
     h("button", { class: "btn btn-primary", type: "submit" }, submitLabel),
@@ -647,14 +683,14 @@ function renderHostDrawer() {
         value: host.notes,
         onInput: (e) => { host.notes = e.target.value; },
       })),
-      field("登录密码", bind(host, "password", { type: "password", autocomplete: "off" })),
+      field("登录密码", bind(host, "password", { type: "password" })),
       field("私钥（OpenSSH / PEM）", h("textarea", {
         class: "mono",
         value: host.privateKey || "",
         placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----",
         onInput: (e) => { host.privateKey = e.target.value; },
       })),
-      field("私钥口令（可选）", bind(host, "passphrase", { type: "password", autocomplete: "off" })),
+      field("私钥口令（可选）", bind(host, "passphrase", { type: "password" })),
       field("连接后发送方式", h("select", {
         onChange: (e) => {
           host.startupCommandRunMode = e.target.value;

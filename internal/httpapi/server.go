@@ -5,15 +5,16 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	web "netcatty-center"
 	"netcatty-center/internal/config"
 	"netcatty-center/internal/security"
 	"netcatty-center/internal/share"
 	"netcatty-center/internal/store"
-	"netcatty-center/public"
 
 	"github.com/gin-gonic/gin"
 )
@@ -80,10 +81,7 @@ func (s *Server) routes() {
 	s.engine.GET("/api/admin/settings", s.requireAdmin, s.getSettings)
 	s.engine.PUT("/api/admin/settings", s.requireAdmin, s.putSettings)
 
-	s.engine.GET("/", s.index)
-	s.engine.GET("/styles.css", s.publicFile("styles.css", "text/css; charset=utf-8"))
-	s.engine.GET("/app.js", s.publicFile("app.js", "text/javascript; charset=utf-8"))
-	s.engine.NoRoute(s.notFound)
+	s.engine.NoRoute(s.serveSPA)
 }
 
 func (s *Server) health(c *gin.Context) {
@@ -569,35 +567,39 @@ func (s *Server) clearSession(c *gin.Context) {
 	})
 }
 
-func (s *Server) index(c *gin.Context) {
-	s.writePublic(c, "index.html", "text/html; charset=utf-8")
-}
-
-func (s *Server) publicFile(name, contentType string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		s.writePublic(c, name, contentType)
+func (s *Server) serveSPA(c *gin.Context) {
+	if strings.HasPrefix(c.Request.URL.Path, "/api/") || strings.HasPrefix(c.Request.URL.Path, "/ws/") {
+		fail(c, http.StatusNotFound, "Not found")
+		return
 	}
-}
-
-func (s *Server) writePublic(c *gin.Context, name, contentType string) {
-	data, err := fs.ReadFile(public.FS, name)
+	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+		fail(c, http.StatusNotFound, "Not found")
+		return
+	}
+	root, err := fs.Sub(web.DistFS, "dist")
 	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	name := strings.TrimPrefix(path.Clean("/"+c.Request.URL.Path), "/")
+	if name == "" || name == "." {
+		name = "index.html"
+	}
+	if strings.Contains(name, "..") {
 		fail(c, http.StatusNotFound, "Not found")
 		return
 	}
-	c.Data(http.StatusOK, contentType, data)
-}
-
-func (s *Server) notFound(c *gin.Context) {
-	if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-		fail(c, http.StatusNotFound, "Not found")
+	if f, err := root.Open(name); err == nil {
+		_ = f.Close()
+		http.FileServer(http.FS(root)).ServeHTTP(c.Writer, c.Request)
 		return
 	}
-	if c.Request.Method == http.MethodGet {
-		s.index(c)
+	data, err := fs.ReadFile(root, "index.html")
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	fail(c, http.StatusNotFound, "Not found")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", data)
 }
 
 func currentAdmin(c *gin.Context) store.Admin {
@@ -739,4 +741,3 @@ func cors() gin.HandlerFunc {
 		c.Next()
 	}
 }
-

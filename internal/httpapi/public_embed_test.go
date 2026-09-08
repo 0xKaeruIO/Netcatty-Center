@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,21 +25,32 @@ func TestEmbeddedPublicUIIsServed(t *testing.T) {
 	if index.Code != http.StatusOK {
 		t.Fatalf("index=%d", index.Code)
 	}
-	if !strings.Contains(index.Body.String(), "Netcatty Center") {
-		t.Fatalf("index body=%q", index.Body.String())
+	body := index.Body.String()
+	if !strings.Contains(body, "Netcatty Center") {
+		t.Fatalf("index body=%q", body)
+	}
+	if !strings.Contains(body, "/assets/") {
+		t.Fatalf("index missing hashed assets: %q", body)
 	}
 
+	asset := regexp.MustCompile(`/assets/[^"']+\.js`).FindString(body)
+	if asset == "" {
+		t.Fatalf("no js asset in index: %q", body)
+	}
 	js := httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	req = httptest.NewRequest(http.MethodGet, asset, nil)
 	srv.Engine().ServeHTTP(js, req)
-	if js.Code != http.StatusOK || !strings.Contains(js.Body.String(), "function boot") {
-		t.Fatalf("app.js=%d body=%q", js.Code, js.Body.String()[:min(80, js.Body.Len())])
+	if js.Code != http.StatusOK {
+		t.Fatalf("%s=%d", asset, js.Code)
+	}
+	if !strings.Contains(js.Body.String(), "Netcatty") && js.Body.Len() < 100 {
+		t.Fatalf("%s too small: %d", asset, js.Body.Len())
 	}
 
-	css := httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/styles.css", nil)
-	srv.Engine().ServeHTTP(css, req)
-	if css.Code != http.StatusOK || !strings.Contains(css.Body.String(), "--brass") {
-		t.Fatalf("styles.css=%d", css.Code)
+	spa := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/hosts", nil)
+	srv.Engine().ServeHTTP(spa, req)
+	if spa.Code != http.StatusOK || !strings.Contains(spa.Body.String(), "Netcatty Center") {
+		t.Fatalf("spa fallback=%d", spa.Code)
 	}
 }

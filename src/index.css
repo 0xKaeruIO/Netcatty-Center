@@ -1,0 +1,274 @@
+:root {
+  --bg: #12110e;
+  --bg-raised: #1b1914;
+  --line: #3a3429;
+  --text: #efe6d4;
+  --muted: #9a8f7a;
+  --brass: #c4a35a;
+  --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.ncc-shell {
+  min-height: 100%;
+}
+
+.ncc-sider {
+  border-right: 1px solid var(--line);
+}
+
+.ncc-shell .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.ncc-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 20px 8px;
+}
+
+.ncc-brand b {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--brass);
+}
+
+.ncc-brand span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ncc-sider-foot {
+  padding: 16px 20px 22px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ncc-page {
+  padding: 28px 32px 48px;
+}
+
+.ncc-page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.ncc-page-head h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.ncc-page-head p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ncc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.ncc-tree {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-raised);
+}
+
+.ncc-tree-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ncc-tree-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  padding-left: calc(14px + var(--depth, 0) * 22px);
+  border-top: 1px solid #2a261e;
+}
+
+.ncc-tree-row:first-child {
+  border-top: 0;
+}
+
+.ncc-tree-group {
+  background: #18160f;
+}
+
+.ncc-tree-main {
+  min-width: 0;
+}
+
+.ncc-tree-main strong,
+.ncc-tree-main .host-label {
+  display: block;
+}
+
+.ncc-tree-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.ncc-tree-toggle {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--brass);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.ncc-empty {
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+.ncc-auth {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+}
+
+.ncc-auth-hero {
+  padding: 72px 64px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(196, 163, 90, 0.14), transparent 40%),
+    linear-gradient(180deg, #1a1711 0%, #12110e 100%);
+  border-right: 1px solid var(--line);
+}
+
+.ncc-auth-hero h1 {
+  font-size: 40px;
+  line-height: 1.2;
+  margin: 28px 0 16px;
+}
+
+.ncc-auth-hero p {
+  color: var(--muted);
+  max-width: 420px;
+  font-size: 16px;
+}
+
+.ncc-auth-form {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.ncc-auth-card {
+  width: min(420px, 100%);
+}
+
+.ncc-hint {
+  color: var(--muted);
+  margin: 0;
+  font-size: 13px;
+}
+
+.ncc-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ncc-rule-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #16140f;
+}
+
+.ncc-rule-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+}
+
+.ncc-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.ncc-key-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ncc-secret {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  background: #16140f;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+@media (max-width: 900px) {
+  .ncc-auth {
+    grid-template-columns: 1fr;
+  }
+  .ncc-auth-hero {
+    padding: 36px 24px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ncc-page {
+    padding: 20px 16px 32px;
+  }
+}

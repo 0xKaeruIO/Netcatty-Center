@@ -27,13 +27,17 @@ go run ./cmd/center --admin-user admin --admin-password change-me
 
 数据文件默认写在 `data/center.sqlite`。Linux 用 systemd 部署可见 `examples/netcatty-center.service`。
 
-编译后管理后台页面会打进二进制，不必再带 `public` 目录。改 `public/` 后需要重新 `go run` / `go build`。
+管理后台是仓库根目录的 React + Ant Design，构建产物写到 `dist/`（原先的 `public/`），再 embed 进二进制。改前端后先打包再编译：
 
 ```bash
+npm install
+npm run build
 go test ./...
 go build -o center.exe ./cmd/center
 ./center.exe
 ```
+
+开发时可以 `npm run dev`（Vite，默认代理到 `https://127.0.0.1:4780`），同时另开一个 `go run ./cmd/center`。
 
 环境变量：
 
@@ -107,7 +111,8 @@ internal/config/   端口、数据目录
 internal/store/    SQLite
 internal/security/ 密码与 API 密钥
 internal/httpapi/  Gin 路由（管理员会话 + catalog）
-public/            管理后台页面（构建时 embed 进二进制）
+src/               管理后台 React 源码
+dist/              前端构建产物（embed 进二进制，取代原先的 public/）
 examples/          主机 JSON 导入示例、systemd 单元
 data/              运行时数据库（不入库）
 ```
